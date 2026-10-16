@@ -101,3 +101,29 @@ func TestValidateName(t *testing.T) {
 		}
 	}
 }
+
+func TestMetaIsLoadedAndNeverListedAsAFile(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "main.go", "package main")
+	write(t, root, MetaFile, "post:\n  - go mod tidy\nnext:\n  - go run .\n")
+	m, err := LoadMeta(root)
+	if err != nil || len(m.Post) != 1 || m.Post[0] != "go mod tidy" || len(m.Next) != 1 {
+		t.Fatalf("meta = %+v, err = %v", m, err)
+	}
+	files, err := ListFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		if f == MetaFile {
+			t.Fatal("the meta file must not be part of the template files")
+		}
+	}
+	if m, err := LoadMeta(t.TempDir()); err != nil || len(m.Post) != 0 {
+		t.Fatalf("missing file must give an empty Meta: %+v %v", m, err)
+	}
+	write(t, root, MetaFile, "post: [unclosed")
+	if _, err := LoadMeta(root); err == nil {
+		t.Fatal("broken YAML must be reported")
+	}
+}

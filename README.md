@@ -128,7 +128,7 @@ Write `{{PROJECT_NAME}}`, `{{AUTHOR}}` and friends in your template files **and 
 | `{{ANYTHING}}` | whatever you pass with `--var ANYTHING=value` |
 
 `foundry template vars <name>` lists the placeholders a template uses and which need `--var`.
-Details, ignore rules and tips: [docs/templates.md](docs/templates.md).
+Details, ignore rules, setup steps (`.foundry.yaml`) and tips: [docs/templates.md](docs/templates.md).
 
 ## Commands
 

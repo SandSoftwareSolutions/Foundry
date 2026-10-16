@@ -5,6 +5,14 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-16
+
+### Added
+- Templates can declare their own setup steps and next steps in a `.foundry.yaml` (see `docs/templates.md`),
+  for example `pnpm install` instead of the default `npm install`. `post: []` means "no setup at all". Placeholders
+  such as `{{PROJECT_NAME_KEBAB}}` work in these lines. The file is not copied into projects, and the commands are
+  not run for templates fetched with `--git`.
+
 ## [0.3.0] - 2026-10-16
 
 ### Added

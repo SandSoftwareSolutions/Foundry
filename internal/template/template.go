@@ -18,7 +18,7 @@ const IgnoreFile = ".foundryignore"
 
 // DefaultIgnores are always excluded from templates. A rule in .foundryignore can re-include them,
 // for example "!build/".
-var DefaultIgnores = []string{".git/", "node_modules/", ".venv/", "__pycache__/", "vendor/", "dist/", "build/", IgnoreFile}
+var DefaultIgnores = []string{".git/", "node_modules/", ".venv/", "__pycache__/", "vendor/", "dist/", "build/", IgnoreFile, MetaFile}
 
 var extensionLanguage = map[string]string{
 	".go": "Go", ".py": "Python", ".js": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",

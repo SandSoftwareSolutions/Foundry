@@ -15,6 +15,7 @@ import (
 	"github.com/SandSoftwareSolutions/Foundry/internal/gitutil"
 	"github.com/SandSoftwareSolutions/Foundry/internal/post"
 	"github.com/SandSoftwareSolutions/Foundry/internal/project"
+	"github.com/SandSoftwareSolutions/Foundry/internal/render"
 	"github.com/SandSoftwareSolutions/Foundry/internal/template"
 	"github.com/SandSoftwareSolutions/Foundry/templates"
 	"github.com/spf13/cobra"
@@ -76,6 +77,7 @@ Placeholders: {{PROJECT_NAME}}, {{PROJECT_NAME_LOWER}}, {{PROJECT_NAME_UPPER}}, 
 
 // source is where the files of the new project come from.
 type source struct {
+	fromGit  bool   // fetched with --git: its setup commands are not trusted
 	dir      string // template directory
 	language string
 	label    string // shown to the user
@@ -129,7 +131,7 @@ func runNew(cmd *cobra.Command, name string, o newOptions) error {
 		if err != nil {
 			return err
 		}
-		src = source{dir: dir, language: lang, label: o.gitURL}
+		src = source{fromGit: true, dir: dir, language: lang, label: o.gitURL}
 	} else {
 		tmpl, cleanup, err := selectTemplate(cfg, o)
 		if err != nil {
@@ -171,20 +173,61 @@ func runNew(cmd *cobra.Command, name string, o newOptions) error {
 		}
 	}
 
-	runPost(cmd, o, src.language, target)
+	meta := renderMeta(loadMeta(cmd, src), plan.Vars)
+	runPost(cmd, o, src.language, target, meta)
 	setupGit(cmd, o, cfg, src.language, target)
 	maybeOpenEditor(cmd, o, cfg, target)
-	printNextSteps(out, target, src.language)
+	printNextSteps(out, target, src.language, meta)
 	return nil
 }
 
-func runPost(cmd *cobra.Command, o newOptions, language, target string) {
+// renderMeta fills placeholders such as {{PROJECT_NAME_KEBAB}} into the declared commands and hints, so a
+// template can say "git remote add origin git@github.com:org/{{PROJECT_NAME_KEBAB}}.git". An absent list stays
+// absent: an empty "post: []" is different from no "post" at all.
+func renderMeta(m template.Meta, vars render.Vars) template.Meta {
+	apply := func(in []string) []string {
+		if in == nil {
+			return nil
+		}
+		out := make([]string, len(in))
+		for i, l := range in {
+			out[i] = render.Apply(l, vars)
+		}
+		return out
+	}
+	return template.Meta{Post: apply(m.Post), Next: apply(m.Next)}
+}
+
+// loadMeta reads the setup steps a template declares. A repository fetched with --git is not trusted to run
+// commands, so its declaration is ignored (with a note).
+func loadMeta(cmd *cobra.Command, src source) template.Meta {
+	meta, err := template.LoadMeta(src.dir)
+	if err != nil {
+		warnf(cmd.ErrOrStderr(), "%v", err)
+		return template.Meta{}
+	}
+	if src.fromGit && meta.Post != nil {
+		infof(cmd.OutOrStdout(), "The template repository lists setup commands; they are not run for a template fetched with --git.")
+		return template.Meta{Next: meta.Next}
+	}
+	return meta
+}
+
+func runPost(cmd *cobra.Command, o newOptions, language, target string, meta template.Meta) {
 	out, errOut := cmd.OutOrStdout(), cmd.ErrOrStderr()
 	if o.noPost {
-		infof(out, "Skipped the language setup step (--no-post).")
+		infof(out, "Skipped the setup step (--no-post).")
 		return
 	}
 	steps := post.StepsFor(language, target)
+	if meta.Post != nil { // an empty list ("post: []") means: no setup steps at all
+		declared, err := post.FromCommands(meta.Post)
+		if err != nil {
+			warnf(errOut, "The template's setup commands are not valid: %v", err)
+			return
+		}
+		steps = declared
+	}
 	for _, s := range steps {
 		infof(out, "%s: %s", s.Name, s.String())
 	}
@@ -248,11 +291,15 @@ func maybeOpenEditor(cmd *cobra.Command, o newOptions, cfg *config.Config, targe
 	okf(cmd.OutOrStdout(), "Opened the project in VS Code.")
 }
 
-func printNextSteps(out io.Writer, target, language string) {
+func printNextSteps(out io.Writer, target, language string, meta template.Meta) {
 	fmt.Fprintln(out)
 	boldf(out, "Next steps")
 	fmt.Fprintf(out, "  cd %s\n", shellQuote(target))
-	for _, s := range post.NextSteps(language) {
+	next := post.NextSteps(language)
+	if len(meta.Next) > 0 {
+		next = meta.Next
+	}
+	for _, s := range next {
 		fmt.Fprintf(out, "  %s\n", s)
 	}
 }
