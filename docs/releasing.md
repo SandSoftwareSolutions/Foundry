@@ -11,7 +11,7 @@ Releases are cut from `main` by pushing a tag. Nothing is published until a pers
    attests the build provenance and creates a **draft** release with the changelog section as notes.
 5. Review the draft, then publish it. Tags with a hyphen (`v1.2.3-rc.1`) become pre-releases.
 
-`go install github.com/SandSoftwareSolutions/Foundry@vX.Y.Z` works as soon as the tag exists.
+`go install github.com/SandSoftwareSolutions/Foundry/cmd/foundry@vX.Y.Z` works as soon as the tag exists.
 
 ## Verifying a download
 

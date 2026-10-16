@@ -33,7 +33,7 @@ Creating project "my-api" from go-cli
 **With Go** (1.25 or newer):
 
 ```console
-go install github.com/SandSoftwareSolutions/Foundry@latest
+go install github.com/SandSoftwareSolutions/Foundry/cmd/foundry@latest
 ```
 
 **From a release:** download the archive for your system from the

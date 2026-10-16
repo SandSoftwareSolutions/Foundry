@@ -1,5 +1,5 @@
-// Package cmd contains the Foundry command line interface.
-package cmd
+// Package cli contains the Foundry command line interface.
+package cli
 
 import (
 	"context"

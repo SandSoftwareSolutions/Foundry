@@ -47,6 +47,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Cross-platform release script (`scripts/dist.sh`) and `Makefile`.
 
 ### Changed
+- The program now lives in `cmd/foundry`, so `go install github.com/SandSoftwareSolutions/Foundry/cmd/foundry@latest` installs a binary called `foundry` (before, it would have been called `Foundry`). The command line code moved to `internal/cli`.
 - Minimum Go version is now 1.25 (needed for the patched `golang.org/x/sys`; older Go releases are out of support).
 - Dependencies updated: `golang.org/x/text` and `golang.org/x/sys` (govulncheck reported vulnerabilities in the old versions; the code did not call them).
 - The Go module path is now `github.com/SandSoftwareSolutions/Foundry`.
