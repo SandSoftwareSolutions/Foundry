@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/SandSoftwareSolutions/Foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/template"
 	"github.com/fatih/color"
 )
 
@@ -467,5 +468,65 @@ func TestSavedTemplateShadowsBuiltInWithTheSameName(t *testing.T) {
 	list := h.mustRun("template", "list", "--quiet")
 	if strings.Count(list, "go-basic") != 1 {
 		t.Fatalf("the name must be listed once: %q", list)
+	}
+}
+
+func TestTemplateDeclaresItsOwnSetupSteps(t *testing.T) {
+	h := newHarness(t)
+	dir := h.writeTemplate("with-setup", map[string]string{
+		"README.md":       "# {{PROJECT_NAME}}\n",
+		"package.json":    `{"name":"x"}` + "\n",
+		template.MetaFile: "post:\n  - go version\nnext:\n  - pnpm dev {{PROJECT_NAME_KEBAB}}\n",
+	})
+	h.mustRun("template", "add", "with-setup", dir)
+	out := h.mustRun("new", "app", "--template", "with-setup", "--path", h.root, "--no-git")
+	if !strings.Contains(out, "Run: go version") || !strings.Contains(out, "Setup finished") {
+		t.Fatalf("declared step did not run: %s", out)
+	}
+	if strings.Contains(out, "npm install") {
+		t.Fatalf("the language default must be replaced by the declared steps: %s", out)
+	}
+	if !strings.Contains(out, "pnpm dev app") {
+		t.Fatalf("declared next steps (with placeholders filled in) missing: %s", out)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "app", template.MetaFile)); err == nil {
+		t.Fatal("the meta file must not be copied into the project")
+	}
+	// --no-post still skips everything.
+	out = h.mustRun("new", "app2", "--template", "with-setup", "--path", h.root, "--no-git", "--no-post")
+	if strings.Contains(out, "Run:") {
+		t.Fatalf("--no-post must skip declared steps: %s", out)
+	}
+}
+
+func TestInvalidDeclaredStepIsRefusedWithoutRunningAnything(t *testing.T) {
+	h := newHarness(t)
+	dir := h.writeTemplate("bad-setup", map[string]string{
+		"README.md":       "x\n",
+		template.MetaFile: "post:\n  - touch pwned && echo hi\n",
+	})
+	h.mustRun("template", "add", "bad-setup", dir)
+	_, errOut, err := h.run("new", "app", "--template", "bad-setup", "--path", h.root, "--no-git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "not valid") {
+		t.Fatalf("stderr: %q", errOut)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "app", "pwned")); err == nil {
+		t.Fatal("a command from a refused line was executed")
+	}
+}
+
+func TestEmptyPostListMeansNoSetupSteps(t *testing.T) {
+	h := newHarness(t)
+	dir := h.writeTemplate("no-setup", map[string]string{
+		"package.json":    `{"name":"x"}` + "\n",
+		template.MetaFile: "post: []\n",
+	})
+	h.mustRun("template", "add", "no-setup", dir)
+	out := h.mustRun("new", "app", "--template", "no-setup", "--path", h.root, "--no-git")
+	if strings.Contains(out, "npm install") || strings.Contains(out, "Setup finished") {
+		t.Fatalf("an empty post list must run nothing: %s", out)
 	}
 }

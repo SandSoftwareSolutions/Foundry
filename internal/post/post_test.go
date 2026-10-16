@@ -72,3 +72,15 @@ func TestNextSteps(t *testing.T) {
 		t.Fatal("unknown language has no next steps")
 	}
 }
+
+func TestFromCommands(t *testing.T) {
+	steps, err := FromCommands([]string{"pnpm install", "", "  go   mod tidy  "})
+	if err != nil || len(steps) != 2 || steps[0].String() != "pnpm install" || steps[1].String() != "go mod tidy" {
+		t.Fatalf("steps = %v, err = %v", steps, err)
+	}
+	for _, bad := range []string{"a && b", "a | b", "a > out", "echo $HOME", "echo `x`", "a; b", "(cd x)"} {
+		if _, err := FromCommands([]string{bad}); err == nil {
+			t.Errorf("%q should be refused", bad)
+		}
+	}
+}

@@ -53,6 +53,27 @@ These are always left out: `.git/`, `node_modules/`, `.venv/`, `__pycache__/`, `
 `build/` and the `.foundryignore` file itself. A template that really needs one of them can
 re-include it with a rule such as `!build/`.
 
+## Setup steps: `.foundry.yaml`
+
+A template can say what to do after a project was created from it. Put a `.foundry.yaml` at its root:
+
+```yaml
+post:            # commands to run in the new project, in order
+  - pnpm install
+next:            # what to tell the user to do next
+  - pnpm dev
+```
+
+- `post` replaces the default setup of the language (`go mod tidy`, `npm install`). Each line is one program with
+  arguments; there is no shell, so no `&&`, pipes, redirects or `$VARIABLES`. A line with shell syntax is refused
+  and nothing from it runs.
+- `post: []` (an empty list) means "no setup steps at all", for a template that needs none.
+- `next` replaces the hints printed at the end.
+- `--no-post` skips the commands.
+- The file is never copied into the project.
+- For a template fetched with `--git`, the `post` commands are **not run** (a repository you just downloaded is not
+  trusted to run commands); the `next` hints are still shown.
+
 ## Language
 
 Foundry guesses the language from the files (`go.mod`, `package.json`, `.py` files ...). Override it

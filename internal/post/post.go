@@ -45,6 +45,25 @@ func StepsFor(language, dir string) []Step {
 	return nil
 }
 
+// FromCommands turns command lines from a template into steps. A line is a program and its arguments separated
+// by spaces; there is no shell, so quotes, pipes, redirects and && are not available.
+func FromCommands(lines []string) ([]Step, error) {
+	var steps []Step
+	for _, line := range lines {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		for _, f := range fields {
+			if strings.ContainsAny(f, ";|&<>`$()") {
+				return nil, fmt.Errorf("%q: only one plain command per line is allowed; shell syntax such as %q is not supported", line, f)
+			}
+		}
+		steps = append(steps, Step{Name: "Run", Cmd: fields[0], Args: fields[1:]})
+	}
+	return steps, nil
+}
+
 // NextSteps are commands the user can run themselves afterwards (nothing here is executed).
 func NextSteps(language string) []string {
 	switch strings.ToLower(language) {
