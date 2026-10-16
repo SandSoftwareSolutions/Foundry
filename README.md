@@ -30,7 +30,9 @@ Creating project "my-api" from go-cli
 
 ## Install
 
-**Debian, Ubuntu and derivatives (apt):**
+Pick the one that fits your system. All of them give you the same `foundry` command; check with `foundry version`.
+
+**Debian, Ubuntu and derivatives (apt)**: add the signed repository once, then install and update like any other package.
 
 ```console
 sudo install -d -m 0755 /etc/apt/keyrings
@@ -40,29 +42,36 @@ sudo apt update
 sudo apt install foundry
 ```
 
-Updates then arrive with `sudo apt upgrade`. The repository is signed; see
-[SandSoftwareSolutions/apt](https://github.com/SandSoftwareSolutions/apt).
+Updates arrive with `sudo apt upgrade`. More about the repository: [SandSoftwareSolutions/apt](https://github.com/SandSoftwareSolutions/apt).
 
-**With Go** (1.25 or newer):
+**Linux and macOS (install script)**: downloads the release for your system, checks its SHA-256
+checksum and installs to `~/.local/bin`. It never uses sudo. Read it first if you like:
+[install.sh](install.sh).
+
+```console
+curl -fsSL https://raw.githubusercontent.com/SandSoftwareSolutions/Foundry/main/install.sh | sh
+```
+
+**Windows**: download `foundry_<version>_windows_amd64.zip` (or `arm64`) from the
+[releases page](https://github.com/SandSoftwareSolutions/Foundry/releases), unzip it and put `foundry.exe`
+in a folder that is on your `PATH`. Check the download against `SHA256SUMS`.
+
+**With Go** (Go 1.25 or newer):
 
 ```console
 go install github.com/SandSoftwareSolutions/Foundry/cmd/foundry@latest
 ```
 
-**From a release:** download the archive for your system from the
-[releases page](https://github.com/SandSoftwareSolutions/Foundry/releases), unpack it and put the
-`foundry` binary on your `PATH`. Check the download against `SHA256SUMS`. Linux releases also come
-as `.deb` packages.
+**Other downloads**: every release has archives for Linux, macOS and Windows (amd64 and arm64), `.deb`
+packages and `SHA256SUMS`. Build provenance can be checked with `gh attestation verify <file> --repo SandSoftwareSolutions/Foundry`.
 
-**From source:**
+**From source**:
 
 ```console
 git clone https://github.com/SandSoftwareSolutions/Foundry
 cd Foundry
 make build        # produces ./foundry
 ```
-
-Check it works with `foundry version`.
 
 ## Quick start
 
