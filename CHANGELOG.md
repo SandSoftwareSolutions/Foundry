@@ -5,6 +5,11 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-16
+
+### Fixed
+- Project names that Windows cannot create (`CON`, `NUL`, `COM1`, `LPT1`, a trailing dot) are refused with a clear message on every platform, so a project made on Linux can be checked out on Windows.
+
 ## [0.5.0] - 2026-10-16
 
 ### Added

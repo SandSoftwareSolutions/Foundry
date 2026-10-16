@@ -92,8 +92,29 @@ func ValidateName(name string) error {
 		return errors.New(`project name cannot contain any of : * ? " < > |`)
 	case len(name) > 100:
 		return errors.New("project name is longer than 100 characters")
+	case strings.HasSuffix(name, "."):
+		return errors.New("project name cannot end with a dot (Windows cannot create such a folder)")
+	case isWindowsReserved(name):
+		return fmt.Errorf("%q is a reserved device name on Windows; choose another project name", name)
 	}
 	return nil
+}
+
+// isWindowsReserved reports whether name (ignoring any extension) is a Windows device name such as CON or COM1.
+// Projects are meant to be portable, so the name is refused on every platform.
+func isWindowsReserved(name string) bool {
+	base := strings.ToUpper(name)
+	if i := strings.Index(base, "."); i >= 0 {
+		base = base[:i]
+	}
+	switch base {
+	case "CON", "PRN", "AUX", "NUL":
+		return true
+	}
+	if len(base) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
+		return base[3] >= '1' && base[3] <= '9'
+	}
+	return false
 }
 
 // BuildPlan walks the template and decides what a project would contain. It writes nothing.

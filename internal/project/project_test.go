@@ -222,12 +222,12 @@ func TestExecutableBitIsPreserved(t *testing.T) {
 }
 
 func TestValidateName(t *testing.T) {
-	for _, ok := range []string{"app", "my-app", "My App", "a.b_c"} {
+	for _, ok := range []string{"app", "my-app", "My App", "a.b_c", "console", "com", "com10", "COM0"} {
 		if err := ValidateName(ok); err != nil {
 			t.Errorf("%q: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"", " ", ".", "..", "a/b", `a\b`, "a:b", "a*b", " x", strings.Repeat("x", 101)} {
+	for _, bad := range []string{"", " ", ".", "..", "a/b", `a\b`, "a:b", "a*b", " x", strings.Repeat("x", 101), "CON", "nul", "Com1", "lpt9.txt", "app."} {
 		if err := ValidateName(bad); err == nil {
 			t.Errorf("%q should be invalid", bad)
 		}
