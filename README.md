@@ -134,14 +134,15 @@ Details, ignore rules, setup steps (`.foundry.yaml`) and tips: [docs/templates.m
 
 | Command | What it does |
 | --- | --- |
-| `foundry new <name>` | Create a project. Flags: `--template`, `--language`, `--git`, `--branch`, `--path`, `--var KEY=VALUE`, `--dry-run`, `--json` (with `--dry-run`), `--no-git`, `--no-post`, `--no-open`, `--non-interactive` |
-| `foundry template add <name> <path>` | Save a directory as a template (`--description`, `--language`) |
+| `foundry new <name>` | Create a project. Flags: `--template`, `--language`, `--git`, `--branch`, `--path`, `--var KEY=VALUE`, `--dry-run`, `--json` (with `--dry-run`), `--strict`, `--no-git`, `--no-post`, `--no-open`, `--non-interactive` |
+| `foundry template add <name> <path-or-git-url>` | Save a directory or a Git repository as a template (`--description`, `--language`, `--branch`) |
 | `foundry template list` | List built-in and saved templates (`--saved`, `--builtin`, `--sort name\|language`, `--quiet`, `--json`) |
 | `foundry template show <name>` | Show details and files (`--files-only`, `--summary`, `--json`) |
 | `foundry template update [name...]` | Rescan templates so file lists stay current |
 | `foundry template edit <name>` | Change description, language, path or name |
 | `foundry template vars <name>` | List the placeholders a template uses |
 | `foundry template export <name> <folder>` | Copy a built-in template to a folder so you can change it |
+| `foundry template init <folder>` | Create the skeleton of a new template (`--add <name>` to save it) |
 | `foundry template remove <name>` | Forget a template (`--force` if it is a default); files stay |
 | `foundry config` | Show settings; set with `--user`, `--license`, `--default-language`, `--docker`, `--interactive`; `--json`, `--path` |
 | `foundry config <language> <template>` | Set the default template of a language, built-in or your own (`""` clears it) |

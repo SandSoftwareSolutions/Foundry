@@ -53,6 +53,33 @@ These are always left out: `.git/`, `node_modules/`, `.venv/`, `__pycache__/`, `
 `build/` and the `.foundryignore` file itself. A template that really needs one of them can
 re-include it with a rule such as `!build/`.
 
+## Starting a new template
+
+`foundry template init ./my-template` creates the skeleton (README with placeholders, a commented `.foundry.yaml`,
+a `.foundryignore` and an example file). Add `--add my-template --language Go` to save it right away.
+
+## Templates from Git
+
+`foundry template add team-api https://github.com/acme/api-template [--branch main]` keeps Foundry's own copy of
+the repository in its config folder. `foundry template update` fetches new commits (fast-forward only), and
+`foundry template remove` deletes the copy again. Setup commands (`post`) of such a template are **never run**;
+its hints (`next`) and declared placeholders (`vars`) are used.
+
+## Placeholders that are asked for
+
+Declare them in `.foundry.yaml` so Foundry asks for them in a terminal, and uses the default when it may not ask:
+
+```yaml
+vars:
+  - name: PORT
+    prompt: Port the service listens on
+    default: "8080"
+```
+
+A placeholder that is used but not declared is asked for too (in a terminal). `--var NAME=value` always wins,
+`--non-interactive` never asks, and `--strict` stops before writing anything if a placeholder still has no value.
+`foundry template vars <name>` shows what a template uses and what is asked.
+
 ## Setup steps: `.foundry.yaml`
 
 A template can say what to do after a project was created from it. Put a `.foundry.yaml` at its root:

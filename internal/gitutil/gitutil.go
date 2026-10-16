@@ -152,3 +152,21 @@ func GlobalUserName() string {
 	}
 	return out
 }
+
+// Pull fast-forwards a clone made by Clone. It never merges or rewrites local changes.
+func Pull(ctx context.Context, dir string) error {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	defer cancel()
+	_, err := run(ctx, dir, "pull", "--quiet", "--ff-only")
+	return err
+}
+
+// IsURL reports whether s looks like a Git address rather than a local path.
+func IsURL(s string) bool {
+	for _, p := range []string{"https://", "http://", "ssh://", "git://", "git@", "file://"} {
+		if strings.HasPrefix(s, p) {
+			return true
+		}
+	}
+	return false
+}
