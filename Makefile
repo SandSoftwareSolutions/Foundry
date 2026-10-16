@@ -5,7 +5,7 @@ COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w -X $(MODULE)/internal/cli.version=$(VERSION) -X $(MODULE)/internal/cli.commit=$(COMMIT) -X $(MODULE)/internal/cli.date=$(DATE)
 
-.PHONY: all build test race cover vet fmt fmt-check check lint vuln smoke dist install clean
+.PHONY: all build test race cover vet fmt fmt-check check lint vuln smoke templates dist install clean
 
 all: check build
 
@@ -43,6 +43,10 @@ vuln:
 
 smoke: build
 	FOUNDRY_BIN=$(CURDIR)/foundry scripts/smoke-test.sh
+
+# Creates a project from every built-in template and runs that language's own tests on it.
+templates: build
+	FOUNDRY_BIN=$(CURDIR)/foundry scripts/test-templates.sh
 
 # Cross-compiled archives and checksums in dist/ (see scripts/dist.sh).
 dist:

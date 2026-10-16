@@ -42,14 +42,14 @@ default template of a language with positional arguments:
 			switch len(args) {
 			case 0:
 				set := map[string]bool{"Go": true, "Python": true, "JavaScript": true, "TypeScript": true, "React": true, "Rust": true, "Java": true}
-				for _, l := range cfg.Languages() {
+				for _, l := range languagesOf(everyTemplate(cfg)) {
 					set[l] = true
 				}
 				for l := range set {
 					cands = append(cands, l)
 				}
 			case 1:
-				cands = templateNames(cfg)
+				cands = everyName(cfg)
 			}
 			var out []string
 			for _, c := range cands {
@@ -84,7 +84,7 @@ default template of a language with positional arguments:
 				if len(args) == 1 {
 					return usagef("give a template name after the language (use \"\" to clear): foundry config %s <template>", args[0])
 				}
-				if err := cfg.SetLanguageDefault(args[0], template); err != nil {
+				if err := setDefault(cfg, args[0], template); err != nil {
 					return err
 				}
 				if template == "" {
@@ -203,4 +203,19 @@ func orDash(s string) string {
 		return "-"
 	}
 	return s
+}
+
+// setDefault makes a template the default of a language. The template may be one of the user's or a built-in
+// one; an empty name clears the default.
+func setDefault(cfg *config.Config, language, name string) error {
+	if name == "" {
+		return cfg.SetLanguageDefault(language, "")
+	}
+	if _, saved := cfg.FindTemplate(name); saved {
+		return cfg.SetLanguageDefault(language, name)
+	}
+	if e, ok := lookup(cfg, name); ok && e.Builtin {
+		return cfg.SetLanguageDefaultTo(language, e.Name)
+	}
+	return notFound("template", name, everyName(cfg))
 }

@@ -322,6 +322,26 @@ func (c *Config) SetLanguageDefault(language, templateName string) error {
 	return nil
 }
 
+// SetLanguageDefaultTo points a language at a template name without checking the saved templates. The
+// caller has to know that the name exists, for example as a template that ships with Foundry.
+func (c *Config) SetLanguageDefaultTo(language, templateName string) error {
+	if strings.TrimSpace(language) == "" || strings.TrimSpace(templateName) == "" {
+		return errors.New("language and template name are required")
+	}
+	if c.LanguageDefaults == nil {
+		c.LanguageDefaults = map[string]string{}
+	}
+	key := language
+	for lang := range c.LanguageDefaults {
+		if strings.EqualFold(lang, language) {
+			key = lang
+			break
+		}
+	}
+	c.LanguageDefaults[key] = templateName
+	return nil
+}
+
 // Languages returns the sorted, de-duplicated languages of the saved templates.
 func (c *Config) Languages() []string {
 	set := map[string]struct{}{}
