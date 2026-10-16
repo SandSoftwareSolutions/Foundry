@@ -16,6 +16,7 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `foundry template add <name> <git-address>` keeps a copy of a template from Git (`--branch`);
   `template update` fast-forwards it, `template remove` deletes the copy. Setup commands of such templates are
   never run.
+- The `.deb` packages install shell completions for bash, zsh and fish.
 - `foundry template show` and `template vars` show the source of a template and the placeholders that are asked for.
 
 ## [0.4.0] - 2026-10-16
