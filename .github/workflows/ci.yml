@@ -124,10 +124,30 @@ jobs:
           cache: true
       - run: make smoke
 
+  templates:
+    name: built-in templates build and pass their tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Rust
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - run: make templates
+
   # Required status check: one name to protect in the branch rules.
   ci-ok:
     if: always()
-    needs: [test, lint, vulncheck, cross-build, smoke]
+    needs: [test, lint, vulncheck, cross-build, smoke, templates]
     runs-on: ubuntu-latest
     steps:
       - name: All jobs must have succeeded

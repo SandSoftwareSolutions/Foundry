@@ -11,6 +11,7 @@ import (
 	"github.com/SandSoftwareSolutions/Foundry/internal/config"
 	"github.com/SandSoftwareSolutions/Foundry/internal/render"
 	"github.com/SandSoftwareSolutions/Foundry/internal/template"
+	"github.com/SandSoftwareSolutions/Foundry/templates"
 	"github.com/spf13/cobra"
 )
 
@@ -21,12 +22,13 @@ func newTemplateCmd() *cobra.Command {
 		Short:   "Manage saved templates",
 		Long: `Save directories as templates, list them, inspect them and keep them up to date.
 
-A template is a normal directory. Put a .foundryignore file in it to leave things out
+Foundry ships with built-in templates for common starts (see "foundry template list"); you can use them
+right away and save your own next to them. A template is a normal directory. Put a .foundryignore file in it to leave things out
 (same rules as .gitignore). node_modules, .git, vendor, dist, build, .venv and __pycache__ are
 always left out unless you re-include them with a rule such as "!build/".`,
 	}
 	cmd.AddCommand(newTemplateAddCmd(), newTemplateListCmd(), newTemplateShowCmd(), newTemplateRemoveCmd(),
-		newTemplateUpdateCmd(), newTemplateEditCmd(), newTemplateVarsCmd())
+		newTemplateUpdateCmd(), newTemplateEditCmd(), newTemplateVarsCmd(), newTemplateExportCmd())
 	return cmd
 }
 
@@ -39,7 +41,7 @@ func templateCompletion(cmd *cobra.Command, args []string, toComplete string) ([
 		return nil, cobra.ShellCompDirectiveNoFileComp
 	}
 	var out []string
-	for _, n := range templateNames(cfg) {
+	for _, n := range everyName(cfg) {
 		if strings.HasPrefix(strings.ToLower(n), strings.ToLower(toComplete)) {
 			out = append(out, n)
 		}
@@ -102,77 +104,113 @@ Adding a name that exists replaces that template.`,
 
 func newTemplateListCmd() *cobra.Command {
 	var sortBy string
-	var quiet, asJSON bool
+	var quiet, asJSON, onlySaved, onlyBuiltin bool
 	cmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
-		Short:   "List saved templates",
+		Short:   "List the built-in templates and your saved ones",
 		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if sortBy != "name" && sortBy != "language" {
 				return usagef("--sort must be name or language")
 			}
+			if onlySaved && onlyBuiltin {
+				return usagef("choose at most one of --saved and --builtin")
+			}
 			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
-			ts := sortedTemplates(cfg)
+			var list []entry
+			for _, e := range everyTemplate(cfg) {
+				if (onlySaved && e.Builtin) || (onlyBuiltin && !e.Builtin) {
+					continue
+				}
+				list = append(list, e)
+			}
 			if sortBy == "language" {
-				sort.SliceStable(ts, func(i, j int) bool { return ts[i].Language < ts[j].Language })
+				sort.SliceStable(list, func(i, j int) bool { return list[i].Language < list[j].Language })
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
 				type item struct {
 					config.Template
+					Builtin    bool     `json:"builtin"`
 					DefaultFor []string `json:"default_for"`
 					Exists     bool     `json:"exists"`
 				}
-				items := make([]item, 0, len(ts))
-				for _, t := range ts {
-					_, err := os.Stat(t.Path)
-					d := cfg.DefaultFor(t.Name)
+				items := make([]item, 0, len(list))
+				for _, e := range list {
+					exists := true
+					if !e.Builtin {
+						_, err := os.Stat(e.Path)
+						exists = err == nil
+					}
+					d := cfg.DefaultFor(e.Name)
 					if d == nil {
 						d = []string{}
 					}
-					t.Files = nil
-					items = append(items, item{Template: t, DefaultFor: d, Exists: err == nil})
+					e.Files = nil
+					items = append(items, item{Template: e.Template, Builtin: e.Builtin, DefaultFor: d, Exists: exists})
 				}
 				enc := json.NewEncoder(out)
 				enc.SetIndent("", "  ")
 				return enc.Encode(items)
 			}
-			if len(ts) == 0 {
+			if len(list) == 0 {
 				if !quiet {
-					fmt.Fprintln(out, "No templates saved yet.\nAdd one with: foundry template add <name> <path>")
+					fmt.Fprintln(out, "No templates here.\nSave one with: foundry template add <name> <path>")
 				}
 				return nil
 			}
 			if quiet {
-				for _, t := range ts {
-					fmt.Fprintln(out, t.Name)
+				for _, e := range list {
+					fmt.Fprintln(out, e.Name)
 				}
 				return nil
 			}
-			boldf(out, "Saved templates (%d)\n", len(ts))
-			for _, t := range ts {
-				line := fmt.Sprintf("%-24s %-12s %s", t.Name, t.Language, t.Path)
-				fmt.Fprintln(out, line)
-				if t.Description != "" {
-					fmt.Fprintf(out, "    %s\n", t.Description)
+			printGroup := func(title string, builtin bool) {
+				var group []entry
+				for _, e := range list {
+					if e.Builtin == builtin {
+						group = append(group, e)
+					}
 				}
-				if d := cfg.DefaultFor(t.Name); len(d) > 0 {
-					infof(out, "    default for: %s", strings.Join(d, ", "))
+				if len(group) == 0 {
+					return
 				}
-				if _, err := os.Stat(t.Path); err != nil {
-					warnf(out, "    path no longer exists")
+				boldf(out, "%s (%d)", title, len(group))
+				for _, e := range group {
+					where := e.Path
+					if e.Builtin {
+						where = e.Description
+					}
+					fmt.Fprintf(out, "  %-20s %-12s %s\n", e.Name, e.Language, where)
+					if !e.Builtin && e.Description != "" {
+						fmt.Fprintf(out, "      %s\n", e.Description)
+					}
+					if d := cfg.DefaultFor(e.Name); len(d) > 0 {
+						infof(out, "      default for: %s", strings.Join(d, ", "))
+					}
+					if !e.Builtin {
+						if _, err := os.Stat(e.Path); err != nil {
+							warnf(out, "      path no longer exists")
+						}
+					}
 				}
+				fmt.Fprintln(out)
 			}
+			printGroup("Your templates", false)
+			printGroup("Built-in templates", true)
+			fmt.Fprintln(out, "Use one with: foundry new <name> --template <template>   (or --language <Language>)")
 			return nil
 		},
 	}
 	cmd.Flags().StringVar(&sortBy, "sort", "name", "Sort by name or language")
 	cmd.Flags().BoolVar(&quiet, "quiet", false, "Only print the names")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "Print as JSON")
+	cmd.Flags().BoolVar(&onlySaved, "saved", false, "Only the templates you saved")
+	cmd.Flags().BoolVar(&onlyBuiltin, "builtin", false, "Only the templates that ship with Foundry")
 	return cmd
 }
 
@@ -188,9 +226,17 @@ func newTemplateShowCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			t, ok := cfg.FindTemplate(args[0])
+			e, ok := lookup(cfg, args[0])
 			if !ok {
-				return notFound("template", args[0], templateNames(cfg))
+				return notFound("template", args[0], everyName(cfg))
+			}
+			t := &e.Template
+			if e.Builtin {
+				files, err := templates.Files(e.Name)
+				if err != nil {
+					return err
+				}
+				t.Files = files
 			}
 			out := cmd.OutOrStdout()
 			if asJSON {
@@ -199,14 +245,18 @@ func newTemplateShowCmd() *cobra.Command {
 				return enc.Encode(t)
 			}
 			if !filesOnly {
-				fmt.Fprintf(out, "Template: %s\nLanguage: %s\nPath:     %s\n", t.Name, t.Language, t.Path)
+				if e.Builtin {
+					fmt.Fprintf(out, "Template: %s (built-in)\nLanguage: %s\n", t.Name, t.Language)
+				} else {
+					fmt.Fprintf(out, "Template: %s\nLanguage: %s\nPath:     %s\n", t.Name, t.Language, t.Path)
+				}
 				if t.Description != "" {
 					fmt.Fprintf(out, "About:    %s\n", t.Description)
 				}
 				if d := cfg.DefaultFor(t.Name); len(d) > 0 {
 					infof(out, "Default for: %s", strings.Join(d, ", "))
 				}
-				if _, err := os.Stat(t.Path); err != nil {
+				if _, err := os.Stat(t.Path); !e.Builtin && err != nil {
 					warnf(out, "The template path no longer exists.")
 				}
 			}
@@ -259,7 +309,10 @@ func newTemplateRemoveCmd() *cobra.Command {
 			}
 			t, ok := cfg.FindTemplate(args[0])
 			if !ok {
-				return notFound("template", args[0], templateNames(cfg))
+				if e, found := lookup(cfg, args[0]); found && e.Builtin {
+					return builtinChangeError(e.Name)
+				}
+				return notFound("template", args[0], everyName(cfg))
 			}
 			name := t.Name
 			if d := cfg.DefaultFor(name); len(d) > 0 && !force {
@@ -304,6 +357,9 @@ The description, and a language you set by hand, are kept.`,
 			for _, n := range names {
 				t, ok := cfg.FindTemplate(n)
 				if !ok {
+					if e, found := lookup(cfg, n); found && e.Builtin {
+						return builtinChangeError(e.Name)
+					}
 					return notFound("template", n, templateNames(cfg))
 				}
 				info, err := template.Scan(t.Path)
@@ -345,7 +401,10 @@ func newTemplateEditCmd() *cobra.Command {
 			}
 			t, ok := cfg.FindTemplate(args[0])
 			if !ok {
-				return notFound("template", args[0], templateNames(cfg))
+				if e, found := lookup(cfg, args[0]); found && e.Builtin {
+					return builtinChangeError(e.Name)
+				}
+				return notFound("template", args[0], everyName(cfg))
 			}
 			if f.Changed("description") {
 				t.Description = description
@@ -405,10 +464,15 @@ which you must supply with --var KEY=VALUE.`,
 			if err != nil {
 				return err
 			}
-			t, ok := cfg.FindTemplate(args[0])
+			e, ok := lookup(cfg, args[0])
 			if !ok {
-				return notFound("template", args[0], templateNames(cfg))
+				return notFound("template", args[0], everyName(cfg))
 			}
+			t, cleanup, err := materialize(e)
+			if err != nil {
+				return err
+			}
+			defer cleanup()
 			files, err := template.ListFiles(t.Path)
 			if err != nil {
 				return err
@@ -447,6 +511,38 @@ which you must supply with --var KEY=VALUE.`,
 					fmt.Fprintf(out, "  %-24s needs --var %s=VALUE\n", n, n)
 				}
 			}
+			return nil
+		},
+	}
+}
+
+func newTemplateExportCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "export <name> <folder>",
+		Short: "Copy a built-in template into a folder so you can change it",
+		Long: `Write the files of a built-in template to a new folder. Edit them as you like, then save the folder
+as your own template with "foundry template add".`,
+		Example: `  foundry template export go-basic ./my-go
+  foundry template add my-go ./my-go --language Go`,
+		Args:              cobra.ExactArgs(2),
+		ValidArgsFunction: templateCompletion,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			e, ok := lookup(cfg, args[0])
+			if !ok {
+				return notFound("template", args[0], everyName(cfg))
+			}
+			if !e.Builtin {
+				return usagef("%q is one of your own templates; it already is a folder: %s", e.Name, e.Path)
+			}
+			if err := templates.Extract(e.Name, args[1]); err != nil {
+				return err
+			}
+			okf(cmd.OutOrStdout(), "Wrote the %q template to %s", e.Name, args[1])
+			fmt.Fprintf(cmd.OutOrStdout(), "  Save it as your own with: foundry template add <name> %s --language %s\n", args[1], e.Language)
 			return nil
 		},
 	}

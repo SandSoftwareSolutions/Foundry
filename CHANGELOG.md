@@ -5,6 +5,22 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-16
+
+### Added
+- **Built-in templates** that ship inside the binary: `go-basic`, `go-http`, `node-basic`, `node-http`,
+  `typescript-basic`, `python-basic`, `python-http`, `rust-basic`, `static-site` and `blank`. `foundry new` works
+  right after installing; `--language` uses the built-in template of that language unless you set another.
+- `foundry template export <name> <folder>` copies a built-in template so you can change it.
+- `foundry template list --builtin` and `--saved`; built-in templates can be the default of a language.
+- `scripts/test-templates.sh` and a CI job that create a project from every built-in template and run its
+  own build and tests.
+
+### Changed
+- `foundry template list` shows built-in and saved templates (before: only saved ones). A template you saved
+  hides a built-in one with the same name.
+- The example templates under `examples/` became built-in templates.
+
 ## [0.2.0] - 2026-10-16
 
 ### Security

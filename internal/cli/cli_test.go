@@ -119,7 +119,7 @@ func TestTemplateLifecycle(t *testing.T) {
 	if !strings.Contains(out, `Template "go-cli" saved`) || !strings.Contains(out, "Go") {
 		t.Fatalf("add output: %s", out)
 	}
-	out = h.mustRun("template", "list", "--quiet")
+	out = h.mustRun("template", "list", "--quiet", "--saved")
 	if strings.TrimSpace(out) != "go-cli" {
 		t.Fatalf("list --quiet: %q", out)
 	}
@@ -138,12 +138,12 @@ func TestTemplateLifecycle(t *testing.T) {
 		t.Fatalf("vars output: %s", out)
 	}
 	h.mustRun("template", "edit", "go-cli", "--rename", "gocli", "--description", "renamed")
-	out = h.mustRun("template", "list", "--json")
+	out = h.mustRun("template", "list", "--json", "--saved")
 	if !strings.Contains(out, `"gocli"`) || strings.Contains(out, `"go-cli"`) {
 		t.Fatalf("rename not applied: %s", out)
 	}
 	h.mustRun("template", "remove", "gocli")
-	if out := h.mustRun("template", "list", "--quiet"); strings.TrimSpace(out) != "" {
+	if out := h.mustRun("template", "list", "--quiet", "--saved"); strings.TrimSpace(out) != "" {
 		t.Fatalf("template still listed: %q", out)
 	}
 }
@@ -185,16 +185,22 @@ func TestNewCreatesProjectFromTemplate(t *testing.T) {
 func TestNewByLanguageUsesTheDefaultTemplate(t *testing.T) {
 	h := newHarness(t)
 	h.mustRun("template", "add", "go-cli", goTemplate(h))
-	if _, _, err := h.run("new", "x", "--language", "Go", "--path", h.root, "--dry-run"); err == nil {
-		t.Fatal("expected an error without a default template")
+	// No default set: the built-in default of the language is used.
+	out := h.mustRun("new", "x", "--language", "Go", "--path", h.root, "--dry-run")
+	if !strings.Contains(out, "go-basic (built-in)") {
+		t.Fatalf("expected the built-in Go template, got: %s", out)
 	}
+	// Your own default wins.
 	h.mustRun("config", "Go", "go-cli")
-	out := h.mustRun("new", "x", "--language", "go", "--path", h.root, "--dry-run")
-	if !strings.Contains(out, "Dry run") || !strings.Contains(out, "go-cli") {
+	out = h.mustRun("new", "x", "--language", "go", "--path", h.root, "--dry-run")
+	if !strings.Contains(out, "Dry run") || !strings.Contains(out, "go-cli") || strings.Contains(out, "built-in") {
 		t.Fatalf("output: %s", out)
 	}
 	if _, err := os.Stat(filepath.Join(h.root, "x")); err == nil {
 		t.Fatal("dry run wrote files")
+	}
+	if _, _, err := h.run("new", "x", "--language", "Cobol", "--path", h.root, "--dry-run"); err == nil {
+		t.Fatal("a language without any template must fail")
 	}
 }
 
@@ -326,5 +332,140 @@ func TestNewFromGitRepositoryAndInitialCommit(t *testing.T) {
 	}
 	if n, _ := gitOutput(proj, "rev-list", "--count", "HEAD"); strings.TrimSpace(n) != "1" {
 		t.Fatalf("the history of the template must not be inherited, commits = %q", n)
+	}
+}
+
+func TestEveryBuiltInTemplateCreatesACleanProject(t *testing.T) {
+	h := newHarness(t)
+	var listed []struct {
+		Name    string `json:"name"`
+		Builtin bool   `json:"builtin"`
+	}
+	if err := json.Unmarshal([]byte(h.mustRun("template", "list", "--builtin", "--json")), &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed) < 8 {
+		t.Fatalf("expected at least 8 built-in templates, got %d", len(listed))
+	}
+	for _, tpl := range listed {
+		t.Run(tpl.Name, func(t *testing.T) {
+			if !tpl.Builtin {
+				t.Fatal("not marked built-in")
+			}
+			out := h.mustRun("new", "My Demo-App", "--template", tpl.Name, "--path", h.root, "--dry-run", "--json")
+			var report dryRunReport
+			if err := json.Unmarshal([]byte(out), &report); err != nil {
+				t.Fatalf("not JSON: %v\n%s", err, out)
+			}
+			if len(report.Files) == 0 {
+				t.Fatal("no files planned")
+			}
+			if len(report.Unresolved) != 0 {
+				t.Fatalf("placeholders without a value: %v", report.Unresolved)
+			}
+			for _, f := range report.Files {
+				if strings.Contains(f, "{{") || strings.HasSuffix(f, ".txt") && strings.HasPrefix(f, "go.mod") {
+					t.Fatalf("unexpected file name %q", f)
+				}
+			}
+		})
+	}
+}
+
+func TestBuiltInTemplateIsWrittenWithPlaceholdersFilledIn(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("config", "--user", "Ada")
+	h.mustRun("new", "hello-tool", "--template", "go-basic", "--path", h.root, "--no-git", "--no-post")
+	proj := filepath.Join(h.root, "hello-tool")
+	mod, err := os.ReadFile(filepath.Join(proj, "go.mod"))
+	if err != nil || !strings.Contains(string(mod), "module example.com/hello-tool") {
+		t.Fatalf("go.mod: %q %v", mod, err)
+	}
+	readme, _ := os.ReadFile(filepath.Join(proj, "README.md"))
+	if !strings.Contains(string(readme), "hello-tool") || !strings.Contains(string(readme), "Ada") || strings.Contains(string(readme), "{{") {
+		t.Fatalf("README: %q", readme)
+	}
+	py := h.mustRun("new", "My Py Tool", "--template", "python-basic", "--path", h.root, "--no-git", "--no-post")
+	if !strings.Contains(py, "built-in") {
+		t.Fatalf("output: %s", py)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "My Py Tool", "src", "my_py_tool", "cli.py")); err != nil {
+		t.Fatalf("package directory from a file-name placeholder: %v", err)
+	}
+	entries, _ := os.ReadDir(os.TempDir())
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), "foundry-builtin-") {
+			t.Fatalf("temporary directory left behind: %s", e.Name())
+		}
+	}
+}
+
+func TestBuiltInTemplatesInListShowVarsAndExport(t *testing.T) {
+	h := newHarness(t)
+	out := h.mustRun("template", "list")
+	if !strings.Contains(out, "Built-in templates") || !strings.Contains(out, "go-basic") || !strings.Contains(out, "python-http") {
+		t.Fatalf("list: %s", out)
+	}
+	if out := h.mustRun("template", "show", "node-http", "--files-only"); !strings.Contains(out, "server.js") {
+		t.Fatalf("show: %s", out)
+	}
+	if out := h.mustRun("template", "vars", "static-site"); !strings.Contains(out, "PROJECT_NAME") || strings.Contains(out, "needs --var") {
+		t.Fatalf("vars: %s", out)
+	}
+	dest := filepath.Join(h.root, "copy")
+	h.mustRun("template", "export", "go-http", dest)
+	if _, err := os.Stat(filepath.Join(dest, "go.mod")); err != nil {
+		t.Fatal("exported go.mod missing:", err)
+	}
+	if _, _, err := h.run("template", "export", "go-http", dest); err == nil {
+		t.Fatal("export into a non-empty folder must fail")
+	}
+	// The exported copy can be saved as one's own template and then shadows nothing.
+	h.mustRun("template", "add", "my-http", dest, "--language", "Go")
+	if out := h.mustRun("template", "list", "--saved", "--quiet"); strings.TrimSpace(out) != "my-http" {
+		t.Fatalf("saved: %q", out)
+	}
+}
+
+func TestBuiltInTemplatesCannotBeChanged(t *testing.T) {
+	h := newHarness(t)
+	for _, args := range [][]string{
+		{"template", "remove", "go-basic"},
+		{"template", "edit", "go-basic", "--description", "x"},
+		{"template", "update", "go-basic"},
+	} {
+		_, _, err := h.run(args...)
+		if err == nil || !strings.Contains(err.Error(), "built-in") || !strings.Contains(err.Error(), "template export") {
+			t.Errorf("%v: expected a helpful built-in error, got %v", args, err)
+		}
+	}
+}
+
+func TestBuiltInTemplateCanBeTheLanguageDefault(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("config", "go", "go-http")
+	cfg, _ := config.Load()
+	if cfg.LanguageDefaults["go"] != "go-http" && cfg.LanguageDefaults["Go"] != "go-http" {
+		t.Fatalf("defaults: %v", cfg.LanguageDefaults)
+	}
+	out := h.mustRun("new", "svc", "--language", "Go", "--path", h.root, "--dry-run")
+	if !strings.Contains(out, "go-http (built-in)") {
+		t.Fatalf("output: %s", out)
+	}
+	if _, _, err := h.run("config", "Go", "does-not-exist"); err == nil {
+		t.Fatal("unknown template must fail")
+	}
+}
+
+func TestSavedTemplateShadowsBuiltInWithTheSameName(t *testing.T) {
+	h := newHarness(t)
+	h.mustRun("template", "add", "go-basic", goTemplate(h))
+	out := h.mustRun("new", "x", "--template", "go-basic", "--path", h.root, "--dry-run")
+	if strings.Contains(out, "built-in") {
+		t.Fatalf("the saved template must win: %s", out)
+	}
+	list := h.mustRun("template", "list", "--quiet")
+	if strings.Count(list, "go-basic") != 1 {
+		t.Fatalf("the name must be listed once: %q", list)
 	}
 }

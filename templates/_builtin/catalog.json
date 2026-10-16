@@ -1,0 +1,62 @@
+[
+  {
+    "name": "blank",
+    "language": "Generic",
+    "description": "An empty project: README and editor settings",
+    "default": false
+  },
+  {
+    "name": "go-basic",
+    "language": "Go",
+    "description": "Command line program with flags and tests",
+    "default": true
+  },
+  {
+    "name": "go-http",
+    "language": "Go",
+    "description": "HTTP service with health check, graceful shutdown and tests",
+    "default": false
+  },
+  {
+    "name": "node-basic",
+    "language": "JavaScript",
+    "description": "Node.js program, ES modules, built-in test runner, no dependencies",
+    "default": true
+  },
+  {
+    "name": "node-http",
+    "language": "JavaScript",
+    "description": "Node.js HTTP service with health check and tests, no dependencies",
+    "default": false
+  },
+  {
+    "name": "typescript-basic",
+    "language": "TypeScript",
+    "description": "TypeScript program compiled with tsc, built-in test runner",
+    "default": true
+  },
+  {
+    "name": "python-basic",
+    "language": "Python",
+    "description": "Python command line program with pyproject and unittest",
+    "default": true
+  },
+  {
+    "name": "python-http",
+    "language": "Python",
+    "description": "Python HTTP service with health check and unittest, standard library only",
+    "default": false
+  },
+  {
+    "name": "rust-basic",
+    "language": "Rust",
+    "description": "Rust command line program with a unit test",
+    "default": true
+  },
+  {
+    "name": "static-site",
+    "language": "HTML",
+    "description": "Plain HTML and CSS site",
+    "default": true
+  }
+]

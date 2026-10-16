@@ -1,5 +1,8 @@
 # Writing templates
 
+Foundry ships with built-in templates (`foundry template list --builtin`); everything below applies to them too,
+and to your own. To start from a built-in one, run `foundry template export go-basic ./my-go`.
+
 A Foundry template is an ordinary directory. Everything in it is copied into the new project, with
 placeholders filled in.
 
@@ -62,3 +65,16 @@ JavaScript, TypeScript, React and Vue) and the hints shown at the end.
 `foundry new my-app --git https://github.com/you/template [--branch main]` fetches a shallow clone,
 uses it like a template (placeholders, `.foundryignore`) and starts a fresh history. The history of
 the template is not copied.
+
+## Built-in templates in the source
+
+The built-in templates live in `templates/_builtin/<name>/` and are embedded in the binary. They are listed,
+with a language and a description, in `templates/_builtin/catalog.json`. Two details:
+
+- The directory starts with an underscore so that the Go tools ignore it: the Go sources of the templates are
+  not compiled as part of Foundry.
+- A `go.mod` would make a directory a separate module that cannot be embedded, so templates keep it as
+  `go.mod.txt`; Foundry gives it its real name when it writes a project.
+
+To add a template: create the directory, add it to `catalog.json`, add a line to `scripts/test-templates.sh`
+that builds and tests the generated project, and run `make templates`.

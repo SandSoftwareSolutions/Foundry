@@ -1,0 +1,7 @@
+[package]
+name = "{{PROJECT_NAME_KEBAB}}"
+version = "0.1.0"
+edition = "2021"
+description = "{{PROJECT_NAME}}"
+
+[dependencies]

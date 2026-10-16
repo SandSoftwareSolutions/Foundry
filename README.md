@@ -6,13 +6,9 @@ Foundry turns any directory into a reusable project template. Create a new proje
 name, author and license filled in, setup commands run and a first git commit made.
 
 ```console
-$ foundry template add go-cli ./examples/go-cli
-✓ Template "go-cli" saved
-
-$ foundry config Go go-cli            # make it the default for Go
 $ foundry new my-api --language Go
-Creating project "my-api" from go-cli
-✓ Created 3 files in my-api
+Creating project "my-api" from go-basic (built-in)
+✓ Created 5 files in my-api
 ✓ Initialised a git repository.
 ✓ Added a .gitignore for Go.
 ✓ Created the first commit.
@@ -73,24 +69,47 @@ cd Foundry
 make build        # produces ./foundry
 ```
 
+## Built-in templates
+
+Foundry comes with templates for common starts, so `foundry new` works the moment it is installed. Each one
+builds and passes its own tests, and uses only the language's standard tooling (no frameworks).
+
+| Template | Language | What you get |
+| --- | --- | --- |
+| `go-basic` | Go | Command line program with flags and tests |
+| `go-http` | Go | HTTP service with health check, graceful shutdown and tests |
+| `node-basic` | JavaScript | Node.js program, ES modules, built-in test runner |
+| `node-http` | JavaScript | Node.js HTTP service with health check and tests |
+| `typescript-basic` | TypeScript | TypeScript program compiled with `tsc`, built-in test runner |
+| `python-basic` | Python | Command line program with `pyproject.toml` and `unittest` |
+| `python-http` | Python | HTTP service with health check and `unittest`, standard library only |
+| `rust-basic` | Rust | Command line program with a unit test |
+| `static-site` | HTML | Plain HTML and CSS site |
+| `blank` | any | An empty project: README and editor settings |
+
+`foundry new my-app --language Go` uses the built-in template of that language (marked as default in
+`foundry template list`) unless you chose another. Want to change one? `foundry template export go-basic ./my-go`
+copies it to a folder; edit it and save it as your own with `foundry template add`. Your own templates win when a
+name is the same.
+
 ## Quick start
 
 ```console
-# 1. Save a directory as a template (the language is detected)
-foundry template add go-cli ./examples/go-cli --description "Go CLI starter"
-foundry template add node-cli ./examples/node-cli
+# 1. Create a project from a built-in template
+foundry new my-api --language Go                  # the default template of a language
+foundry new my-tool --template node-basic         # a specific template
+foundry new my-app                                # choose from menus
+foundry template list                             # see what is available
 
-# 2. Optional: pick a default template per language
-foundry config Go go-cli
+# 2. Preview first: nothing is written
+foundry new my-api --template go-http --dry-run
 
-# 3. Create a project
-foundry new my-api --language Go              # default template of a language
-foundry new my-tool --template node-cli       # a specific template
-foundry new my-app                            # choose from menus
+# 3. Make your own templates and defaults
+foundry template add my-go ./path/to/directory    # save any directory as a template
+foundry config Go my-go                           # make it the default for Go
+
+# 4. Other sources
 foundry new my-site --git https://github.com/you/template   # a repository as template
-
-# 4. See what would happen without writing anything
-foundry new my-api --template go-cli --dry-run
 ```
 
 On the first run Foundry creates `~/.foundry/config.yaml`, detects the tools on your machine and
@@ -117,14 +136,15 @@ Details, ignore rules and tips: [docs/templates.md](docs/templates.md).
 | --- | --- |
 | `foundry new <name>` | Create a project. Flags: `--template`, `--language`, `--git`, `--branch`, `--path`, `--var KEY=VALUE`, `--dry-run`, `--json` (with `--dry-run`), `--no-git`, `--no-post`, `--no-open`, `--non-interactive` |
 | `foundry template add <name> <path>` | Save a directory as a template (`--description`, `--language`) |
-| `foundry template list` | List templates (`--sort name\|language`, `--quiet`, `--json`) |
+| `foundry template list` | List built-in and saved templates (`--saved`, `--builtin`, `--sort name\|language`, `--quiet`, `--json`) |
 | `foundry template show <name>` | Show details and files (`--files-only`, `--summary`, `--json`) |
 | `foundry template update [name...]` | Rescan templates so file lists stay current |
 | `foundry template edit <name>` | Change description, language, path or name |
 | `foundry template vars <name>` | List the placeholders a template uses |
+| `foundry template export <name> <folder>` | Copy a built-in template to a folder so you can change it |
 | `foundry template remove <name>` | Forget a template (`--force` if it is a default); files stay |
 | `foundry config` | Show settings; set with `--user`, `--license`, `--default-language`, `--docker`, `--interactive`; `--json`, `--path` |
-| `foundry config <language> <template>` | Set the default template of a language (`""` clears it) |
+| `foundry config <language> <template>` | Set the default template of a language, built-in or your own (`""` clears it) |
 | `foundry detect` | Detect languages, package managers and tools (`--json`, `--yes`) |
 | `foundry completion <shell>` | Shell completion for bash, zsh, fish and PowerShell |
 | `foundry version` | Print version information |

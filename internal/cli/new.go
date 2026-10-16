@@ -16,6 +16,7 @@ import (
 	"github.com/SandSoftwareSolutions/Foundry/internal/post"
 	"github.com/SandSoftwareSolutions/Foundry/internal/project"
 	"github.com/SandSoftwareSolutions/Foundry/internal/template"
+	"github.com/SandSoftwareSolutions/Foundry/templates"
 	"github.com/spf13/cobra"
 )
 
@@ -130,11 +131,16 @@ func runNew(cmd *cobra.Command, name string, o newOptions) error {
 		}
 		src = source{dir: dir, language: lang, label: o.gitURL}
 	} else {
-		tmpl, err := selectTemplate(cfg, o)
+		tmpl, cleanup, err := selectTemplate(cfg, o)
 		if err != nil {
 			return err
 		}
-		src = source{dir: tmpl.Path, language: tmpl.Language, label: tmpl.Name}
+		defer cleanup()
+		label := tmpl.Name
+		if tmpl.Description != "" && isBuiltinName(tmpl.Name, cfg) {
+			label = tmpl.Name + " (built-in)"
+		}
+		src = source{dir: tmpl.Path, language: tmpl.Language, label: label}
 	}
 
 	plan, err := project.BuildPlan(project.Options{
@@ -302,53 +308,67 @@ func printDryRun(out io.Writer, plan *project.Plan, src source, target string, a
 	return nil
 }
 
-// selectTemplate resolves the template from the flags, or asks the user.
-func selectTemplate(cfg *config.Config, o newOptions) (*config.Template, error) {
+// isBuiltinName reports whether name refers to a built-in template that the user has not shadowed.
+func isBuiltinName(name string, cfg *config.Config) bool {
+	e, ok := lookup(cfg, name)
+	return ok && e.Builtin
+}
+
+// selectTemplate resolves the template from the flags, or asks the user. The returned function removes any
+// temporary files and must always be called.
+func selectTemplate(cfg *config.Config, o newOptions) (config.Template, func(), error) {
+	none := func() {}
+	pick := func(e entry) (config.Template, func(), error) { return materialize(e) }
 	switch {
 	case o.templateName != "":
-		t, ok := cfg.FindTemplate(o.templateName)
+		e, ok := lookup(cfg, o.templateName)
 		if !ok {
-			return nil, notFound("template", o.templateName, templateNames(cfg))
+			return config.Template{}, none, notFound("template", o.templateName, everyName(cfg))
 		}
-		return t, nil
+		return pick(e)
 	case o.language != "":
-		name := cfg.LanguageDefault(o.language)
-		if name == "" {
-			return nil, fmt.Errorf("no default template is set for language %q\n  Set one with:  foundry config %s <template-name>\n  Or pick one:   foundry new <name> --template <template-name>", o.language, o.language)
+		if name := cfg.LanguageDefault(o.language); name != "" {
+			e, ok := lookup(cfg, name)
+			if !ok {
+				return config.Template{}, none, fmt.Errorf("the default template %q for %s no longer exists; set a new one with: foundry config %s <template-name>", name, o.language, o.language)
+			}
+			return pick(e)
 		}
-		t, ok := cfg.FindTemplate(name)
-		if !ok {
-			return nil, fmt.Errorf("the default template %q for %s no longer exists; set a new one with: foundry config %s <template-name>", name, o.language, o.language)
+		if b, ok := templates.DefaultFor(o.language); ok {
+			e, _ := lookup(cfg, b.Name)
+			return pick(e)
 		}
-		return t, nil
+		return config.Template{}, none, fmt.Errorf("there is no template for language %q yet\n  See what is available:  foundry template list\n  Or choose one:            foundry new <name> --template <template-name>", o.language)
 	}
-	if len(cfg.Templates) == 0 {
-		return nil, fmt.Errorf("no templates saved yet; add one with: foundry template add <name> <path>")
-	}
+	list := everyTemplate(cfg)
 	if o.nonInteractive || !cfg.Interactive || !interactive() {
 		var b strings.Builder
 		b.WriteString("choose a template with --template, --language or --git. Available templates:\n")
-		for _, t := range sortedTemplates(cfg) {
+		for _, t := range list {
 			fmt.Fprintf(&b, "  %-24s %s\n", t.Name, t.Language)
 		}
-		return nil, usagef("%s", strings.TrimRight(b.String(), "\n"))
+		return config.Template{}, none, usagef("%s", strings.TrimRight(b.String(), "\n"))
 	}
-	return pickInteractively(cfg)
+	e, err := pickInteractively(cfg, list)
+	if err != nil {
+		return config.Template{}, none, err
+	}
+	return pick(e)
 }
 
-func pickInteractively(cfg *config.Config) (*config.Template, error) {
-	langs := cfg.Languages()
+func pickInteractively(cfg *config.Config, list []entry) (entry, error) {
+	langs := languagesOf(list)
 	if len(langs) == 0 {
-		return nil, fmt.Errorf("none of the saved templates has a language")
+		return entry{}, fmt.Errorf("none of the templates has a language")
 	}
 	lang := langs[0]
 	if len(langs) > 1 {
 		if err := survey.AskOne(&survey.Select{Message: "Select a language:", Options: langs, PageSize: min(len(langs), pageSize)}, &lang); err != nil {
-			return nil, fmt.Errorf("selection cancelled")
+			return entry{}, fmt.Errorf("selection cancelled")
 		}
 	}
-	var candidates []config.Template
-	for _, t := range sortedTemplates(cfg) {
+	var candidates []entry
+	for _, t := range list {
 		if t.Language == lang {
 			candidates = append(candidates, t)
 		}
@@ -359,24 +379,20 @@ func pickInteractively(cfg *config.Config) (*config.Template, error) {
 		if len(cfg.DefaultFor(t.Name)) > 0 {
 			labels[i] += " (default)"
 		}
+		if t.Builtin {
+			labels[i] += " (built-in)"
+		}
 	}
 	var picked string
 	if err := survey.AskOne(&survey.Select{Message: fmt.Sprintf("Select a %s template:", lang), Options: labels, PageSize: min(len(labels), pageSize)}, &picked); err != nil {
-		return nil, fmt.Errorf("selection cancelled")
+		return entry{}, fmt.Errorf("selection cancelled")
 	}
 	for i, l := range labels {
 		if l == picked {
-			t := candidates[i]
-			return &t, nil
+			return candidates[i], nil
 		}
 	}
-	return nil, fmt.Errorf("template not found")
-}
-
-func sortedTemplates(cfg *config.Config) []config.Template {
-	ts := append([]config.Template(nil), cfg.Templates...)
-	sort.Slice(ts, func(i, j int) bool { return ts[i].Name < ts[j].Name })
-	return ts
+	return entry{}, fmt.Errorf("template not found")
 }
 
 func templateNames(cfg *config.Config) []string {
