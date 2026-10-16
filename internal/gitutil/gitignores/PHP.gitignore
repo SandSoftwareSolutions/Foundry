@@ -1,0 +1,9 @@
+/vendor/
+composer.phar
+.phpunit.result.cache
+
+# Environment and editors
+.env
+.idea/
+.vscode/
+.DS_Store

@@ -1,0 +1,11 @@
+.build/
+*.xcodeproj/xcuserdata/
+xcuserdata/
+DerivedData/
+.swiftpm/
+
+# Environment and editors
+.env
+.idea/
+.vscode/
+.DS_Store

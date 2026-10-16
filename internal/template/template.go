@@ -1,222 +1,179 @@
+// Package template inspects template directories: it detects their language and lists their files.
 package template
 
 import (
-	"bufio"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+
+	"github.com/SandSoftwareSolutions/Foundry/internal/ignore"
 )
 
-// Template represents a saved project template
-type Template struct {
-	Name        string   `yaml:"name"`
-	Path        string   `yaml:"path"`
-	Language    string   `yaml:"language"`
-	Description string   `yaml:"description"`
-	Files       []string `yaml:"files,omitempty"` // List of files in template
+// IgnoreFile is the name of the file that excludes paths from a template.
+const IgnoreFile = ".foundryignore"
+
+// DefaultIgnores are always excluded from templates. A rule in .foundryignore can re-include them,
+// for example "!build/".
+var DefaultIgnores = []string{".git/", "node_modules/", ".venv/", "__pycache__/", "vendor/", "dist/", "build/", IgnoreFile}
+
+var extensionLanguage = map[string]string{
+	".go": "Go", ".py": "Python", ".js": "JavaScript", ".mjs": "JavaScript", ".cjs": "JavaScript",
+	".ts": "TypeScript", ".jsx": "React", ".tsx": "React", ".rs": "Rust", ".java": "Java", ".kt": "Kotlin",
+	".cpp": "C++", ".cc": "C++", ".hpp": "C++", ".c": "C", ".h": "C", ".cs": "C#", ".php": "PHP",
+	".rb": "Ruby", ".swift": "Swift", ".vue": "Vue",
 }
 
-// languageIndicators maps file extensions and filenames to languages
-var languageIndicators = map[string]string{
-	// Extensions
-	".go":    "Go",
-	".mod":   "Go",
-	".py":    "Python",
-	".js":    "JavaScript",
-	".ts":    "TypeScript",
-	".jsx":   "React",
-	".tsx":   "React",
-	".rs":    "Rust",
-	".java":  "Java",
-	".kt":    "Kotlin",
-	".cpp":   "C++",
-	".c":     "C",
-	".cs":    "C#",
-	".php":   "PHP",
-	".rb":    "Ruby",
-	".swift": "Swift",
-	".vue":   "Vue",
-
-	// Specific filenames
-	"package.json":     "JavaScript",
-	"tsconfig.json":    "TypeScript",
-	"Cargo.toml":       "Rust",
-	"pom.xml":          "Java",
-	"build.gradle":     "Java",
-	"Gemfile":          "Ruby",
-	"composer.json":    "PHP",
-	"requirements.txt": "Python",
-	"Pipfile":          "Python",
-	"go.mod":           "Go",
-	"Makefile":         "C/C++",
+// fileLanguage maps well-known file names to a language. They weigh more than a single source file.
+var fileLanguage = map[string]string{
+	"package.json": "JavaScript", "tsconfig.json": "TypeScript", "Cargo.toml": "Rust", "pom.xml": "Java",
+	"build.gradle": "Java", "build.gradle.kts": "Kotlin", "Gemfile": "Ruby", "composer.json": "PHP",
+	"requirements.txt": "Python", "pyproject.toml": "Python", "Pipfile": "Python", "go.mod": "Go",
+	"Package.swift": "Swift",
 }
 
-// DetectLanguage scans a directory and determines the primary language
-func DetectLanguage(dir string) (string, error) {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		return "", fmt.Errorf("directory does not exist: %s", dir)
+// Matcher returns the ignore rules of a template directory: defaults first, then its .foundryignore.
+func Matcher(dir string) (*ignore.Matcher, error) {
+	user, err := ignore.Load(dir, IgnoreFile)
+	if err != nil {
+		return nil, fmt.Errorf("cannot read %s: %w", IgnoreFile, err)
 	}
+	return user.Prepend(DefaultIgnores...), nil
+}
 
-	languageCounts := make(map[string]int)
-
-	// Load ignore patterns from root .foundryignore if present
-	ignores := loadIgnorePatterns(dir)
-
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
+// DetectLanguage returns the most likely language of the files in dir, or "Unknown".
+// Ties are broken alphabetically so the result is stable.
+func DetectLanguage(dir string) (string, error) {
+	m, err := Matcher(dir)
+	if err != nil {
+		return "", err
+	}
+	counts := map[string]int{}
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
-			// Skip common directories
-			base := filepath.Base(path)
-			if base == "node_modules" || base == ".git" || base == "vendor" || base == "target" || base == "build" || base == "dist" {
-				return filepath.SkipDir
-			}
-			// Skip ignored directories
-			rel, _ := filepath.Rel(dir, path)
-			if matchIgnore(rel, ignores) {
+		rel, _ := filepath.Rel(dir, p)
+		if rel == "." {
+			return nil
+		}
+		if m.Match(rel, d.IsDir()) {
+			if d.IsDir() {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-
-		// Skip ignored files
-		rel, _ := filepath.Rel(dir, path)
-		if matchIgnore(rel, ignores) {
+		if d.IsDir() {
 			return nil
 		}
-
-		// Check by filename first
-		basename := filepath.Base(path)
-		if lang, ok := languageIndicators[basename]; ok {
-			languageCounts[lang] += 5 // Higher weight for specific files
+		if lang, ok := fileLanguage[d.Name()]; ok {
+			counts[lang] += 5
 			return nil
 		}
-
-		// Check by extension
-		ext := filepath.Ext(path)
-		if lang, ok := languageIndicators[ext]; ok {
-			languageCounts[lang]++
+		if lang, ok := extensionLanguage[strings.ToLower(filepath.Ext(d.Name()))]; ok {
+			counts[lang]++
 		}
-
 		return nil
 	})
-
 	if err != nil {
-		return "", fmt.Errorf("failed to scan directory: %w", err)
+		return "", fmt.Errorf("cannot scan %s: %w", dir, err)
 	}
-
-	if len(languageCounts) == 0 {
-		return "Unknown", nil
+	best, bestN := "Unknown", 0
+	langs := make([]string, 0, len(counts))
+	for l := range counts {
+		langs = append(langs, l)
 	}
-
-	// Find the most common language
-	maxCount := 0
-	primaryLang := "Unknown"
-	for lang, count := range languageCounts {
-		if count > maxCount {
-			maxCount = count
-			primaryLang = lang
+	sort.Strings(langs)
+	for _, l := range langs {
+		if counts[l] > bestN {
+			best, bestN = l, counts[l]
 		}
 	}
-
-	return primaryLang, nil
+	return best, nil
 }
 
-// ScanTemplate scans a directory and creates a Template
-func ScanTemplate(name, path, description string) (*Template, error) {
-	absPath, err := filepath.Abs(path)
+// Info is the result of scanning a template directory.
+type Info struct {
+	Path     string
+	Language string
+	Files    []string // relative, slash separated, sorted
+}
+
+// Scan inspects dir: it resolves the absolute path, detects the language and lists the files that a
+// project created from it would receive.
+func Scan(dir string) (*Info, error) {
+	abs, err := filepath.Abs(dir)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get absolute path: %w", err)
+		return nil, fmt.Errorf("cannot resolve %s: %w", dir, err)
 	}
-
-	if _, err := os.Stat(absPath); os.IsNotExist(err) {
-		return nil, fmt.Errorf("template directory does not exist: %s", absPath)
+	st, err := os.Stat(abs)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, fmt.Errorf("template directory does not exist: %s", abs)
 	}
-
-	lang, err := DetectLanguage(absPath)
 	if err != nil {
 		return nil, err
 	}
+	if !st.IsDir() {
+		return nil, fmt.Errorf("not a directory: %s", abs)
+	}
+	lang, err := DetectLanguage(abs)
+	if err != nil {
+		return nil, err
+	}
+	files, err := ListFiles(abs)
+	if err != nil {
+		return nil, err
+	}
+	return &Info{Path: abs, Language: lang, Files: files}, nil
+}
 
-	// List files in template
-	ignores := loadIgnorePatterns(absPath)
+// ListFiles returns the regular files of dir that are not ignored, relative and slash separated.
+func ListFiles(dir string) ([]string, error) {
+	m, err := Matcher(dir)
+	if err != nil {
+		return nil, err
+	}
 	var files []string
-	err = filepath.Walk(absPath, func(p string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if !info.IsDir() {
-			relPath, _ := filepath.Rel(absPath, p)
-			if matchIgnore(relPath, ignores) {
-				return nil
+		rel, _ := filepath.Rel(dir, p)
+		if rel == "." {
+			return nil
+		}
+		if m.Match(rel, d.IsDir()) {
+			if d.IsDir() {
+				return filepath.SkipDir
 			}
-			files = append(files, relPath)
+			return nil
+		}
+		if d.Type().IsRegular() {
+			files = append(files, filepath.ToSlash(rel))
 		}
 		return nil
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to list template files: %w", err)
+		return nil, fmt.Errorf("cannot list %s: %w", dir, err)
 	}
-
-	tmpl := &Template{
-		Name:        name,
-		Path:        absPath,
-		Language:    lang,
-		Description: description,
-		Files:       files,
-	}
-
-	return tmpl, nil
+	sort.Strings(files)
+	return files, nil
 }
 
-// ValidateName checks if a template name is valid
+// ValidateName checks a template name: it must be non-empty and safe to use as a file name.
 func ValidateName(name string) error {
-	if name == "" {
-		return fmt.Errorf("template name cannot be empty")
-	}
-	if strings.ContainsAny(name, `/\:*?"<>|`) {
-		return fmt.Errorf("template name contains invalid characters")
+	switch {
+	case strings.TrimSpace(name) == "":
+		return errors.New("template name cannot be empty")
+	case name != strings.TrimSpace(name):
+		return errors.New("template name cannot start or end with spaces")
+	case strings.ContainsAny(name, `/\:*?"<>|`):
+		return errors.New(`template name cannot contain any of / \ : * ? " < > |`)
+	case name == "." || name == "..":
+		return errors.New("template name cannot be a single or double dot")
 	}
 	return nil
-}
-
-// loadIgnorePatterns reads .foundryignore in the root directory (if present)
-// and returns a list of glob patterns relative to the root.
-func loadIgnorePatterns(root string) []string {
-	path := filepath.Join(root, ".foundryignore")
-	f, err := os.Open(path)
-	if err != nil {
-		return nil
-	}
-	defer f.Close()
-	var patterns []string
-	s := bufio.NewScanner(f)
-	for s.Scan() {
-		line := strings.TrimSpace(s.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
-		}
-		patterns = append(patterns, line)
-	}
-	return patterns
-}
-
-// matchIgnore checks if a relative path matches any of the ignore patterns.
-// It supports simple glob matching via filepath.Match and prefix directory matching.
-func matchIgnore(relPath string, patterns []string) bool {
-	norm := filepath.ToSlash(relPath)
-	for _, p := range patterns {
-		pp := filepath.ToSlash(strings.TrimSuffix(p, "/"))
-		// Direct glob match
-		if ok, _ := filepath.Match(pp, norm); ok {
-			return true
-		}
-		// Prefix directory match
-		if strings.HasPrefix(norm+"/", pp+"/") {
-			return true
-		}
-	}
-	return false
 }

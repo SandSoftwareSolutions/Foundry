@@ -1,0 +1,13 @@
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.nupkg
+TestResults/
+
+# Environment and editors
+.env
+.idea/
+.vscode/
+.DS_Store

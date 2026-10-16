@@ -1,269 +1,148 @@
+// Package detect finds the languages, package managers and developer tools installed on this machine.
 package detect
 
 import (
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 
-	"github.com/kajvans/foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/config"
 )
 
-type ScanResult struct {
-	Languages       map[string]bool
-	PackageManagers map[string]bool
-	DevTools        map[string]bool
-	VSCodePath      string // Path to VS Code executable
+// Tool is a thing Foundry can look for.
+type Tool struct {
+	Name   string // display name, e.g. "Node.js"
+	Binary string // executable looked up on PATH
 }
 
-// checkVSCode checks for VS Code installation on various platforms
-// Returns the path to VS Code executable if found, empty string otherwise
-func checkVSCode() string {
-	// Try PATH first (works if user added code to PATH)
-	if codePath, err := exec.LookPath("code"); err == nil {
-		return codePath
-	}
+// Catalog lists what is detected, per category.
+var Catalog = struct{ Languages, PackageManagers, DevTools []Tool }{
+	Languages: []Tool{
+		{"Go", "go"}, {"Python", "python3"}, {"Node.js", "node"}, {"Rust", "rustc"}, {"Java", "javac"},
+		{"C++", "g++"}, {"PHP", "php"}, {"Ruby", "ruby"}, {"Swift", "swift"}, {"Kotlin", "kotlinc"},
+		{"C#", "dotnet"}, {"C", "gcc"}, {"TypeScript", "tsc"},
+	},
+	PackageManagers: []Tool{
+		{"pip", "pip3"}, {"npm", "npm"}, {"yarn", "yarn"}, {"pnpm", "pnpm"}, {"cargo", "cargo"},
+		{"maven", "mvn"}, {"gradle", "gradle"}, {"composer", "composer"}, {"make", "make"},
+		{"cmake", "cmake"}, {"bundler", "bundle"}, {"brew", "brew"}, {"apt", "apt"},
+	},
+	DevTools: []Tool{
+		{"git", "git"}, {"docker", "docker"}, {"kubectl", "kubectl"}, {"nginx", "nginx"},
+		{"terraform", "terraform"}, {"ansible", "ansible"}, {"sqlite3", "sqlite3"}, {"mysql", "mysql"},
+		{"psql", "psql"},
+	},
+}
 
-	// Windows-specific checks
-	if runtime.GOOS == "windows" {
-		// Check common installation paths (prefer code.cmd for CLI usage)
-		userProfile := os.Getenv("USERPROFILE")
-		if userProfile != "" {
-			paths := []string{
-				filepath.Join(userProfile, "AppData", "Local", "Programs", "Microsoft VS Code", "bin", "code.cmd"),
-				filepath.Join(userProfile, "AppData", "Local", "Programs", "Microsoft VS Code", "Code.exe"),
-			}
-			for _, path := range paths {
-				if _, err := os.Stat(path); err == nil {
-					return path
-				}
-			}
-		}
+// Result is what a scan found. The slices are sorted and hold only what is installed.
+type Result struct {
+	Languages       []string `json:"languages"`
+	PackageManagers []string `json:"package_managers"`
+	DevTools        []string `json:"dev_tools"`
+	VSCodePath      string   `json:"vscode_path,omitempty"`
+}
 
-		// Check Program Files
-		programFiles := os.Getenv("ProgramFiles")
-		if programFiles != "" {
-			paths := []string{
-				filepath.Join(programFiles, "Microsoft VS Code", "bin", "code.cmd"),
-				filepath.Join(programFiles, "Microsoft VS Code", "Code.exe"),
-			}
-			for _, path := range paths {
-				if _, err := os.Stat(path); err == nil {
-					return path
-				}
-			}
-		}
+// Finder abstracts the machine so a scan can be tested.
+type Finder struct {
+	LookPath func(name string) (string, error)
+	Stat     func(name string) (os.FileInfo, error)
+	Getenv   func(key string) string
+	GOOS     string
+}
 
-		// Check for code.cmd in PATH
-		if codePath, err := exec.LookPath("code.cmd"); err == nil {
-			return codePath
-		}
+// System returns a Finder for the real machine.
+func System() Finder {
+	return Finder{LookPath: exec.LookPath, Stat: os.Stat, Getenv: os.Getenv, GOOS: runtime.GOOS}
+}
 
-		// Check if VS Code is currently running (fallback for custom install locations)
-		// Windows: check for Code.exe process and get its path
-		cmd := exec.Command("powershell", "-Command", "Get-Process Code -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty Path")
-		if output, err := cmd.Output(); err == nil && len(output) > 0 {
-			path := strings.TrimSpace(string(output))
-			if path != "" {
-				// Try to find bin\code.cmd in the same directory structure
-				dir := filepath.Dir(path)
-				codeCmdPath := filepath.Join(dir, "bin", "code.cmd")
-				if _, err := os.Stat(codeCmdPath); err == nil {
-					return codeCmdPath
-				}
-				return path
-			}
+func (f Finder) found(binary string) bool {
+	_, err := f.LookPath(binary)
+	return err == nil
+}
+
+func (f Finder) exists(path string) bool {
+	_, err := f.Stat(path)
+	return err == nil
+}
+
+// VSCode returns the path of the VS Code command line launcher, or "".
+func (f Finder) VSCode() string {
+	for _, name := range []string{"code", "code.cmd"} {
+		if p, err := f.LookPath(name); err == nil {
+			return p
 		}
 	}
-
-	// Linux-specific checks
-	if runtime.GOOS == "linux" {
-		// Check common Linux installation paths
-		paths := []string{
-			"/usr/bin/code",
-			"/usr/local/bin/code",
-			"/snap/bin/code",
-			"/usr/share/code/code",
+	var candidates []string
+	switch f.GOOS {
+	case "windows":
+		if local := f.Getenv("LOCALAPPDATA"); local != "" {
+			candidates = append(candidates, filepath.Join(local, "Programs", "Microsoft VS Code", "bin", "code.cmd"))
 		}
-		for _, path := range paths {
-			if _, err := os.Stat(path); err == nil {
-				return path
-			}
+		if pf := f.Getenv("ProgramFiles"); pf != "" {
+			candidates = append(candidates, filepath.Join(pf, "Microsoft VS Code", "bin", "code.cmd"))
 		}
-
-		// Check if VS Code is running (works for custom install locations)
-		cmd := exec.Command("pgrep", "-x", "code")
-		if err := cmd.Run(); err == nil {
-			// Try to get the path from the running process
-			cmd = exec.Command("sh", "-c", "readlink -f /proc/$(pgrep -x code | head -1)/exe")
-			if output, err := cmd.Output(); err == nil {
-				return strings.TrimSpace(string(output))
-			}
+	case "darwin":
+		candidates = []string{"/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"}
+	default:
+		candidates = []string{"/usr/bin/code", "/usr/local/bin/code", "/snap/bin/code", "/usr/share/code/bin/code"}
+	}
+	for _, c := range candidates {
+		if f.exists(c) {
+			return c
 		}
 	}
-
-	// macOS-specific check
-	if runtime.GOOS == "darwin" {
-		if _, err := os.Stat("/Applications/Visual Studio Code.app"); err == nil {
-			return "/Applications/Visual Studio Code.app/Contents/Resources/app/bin/code"
-		}
-	}
-
 	return ""
 }
 
-// ScanSystem does all the logic of checking binaries
-func ScanSystem() *ScanResult {
-	categories := map[string]map[string]string{
-		"Languages": {
-			"Go":         "go",
-			"Python":     "python3",
-			"Node.js":    "node",
-			"Rust":       "rustc",
-			"Java":       "javac",
-			"C++":        "g++",
-			"PHP":        "php",
-			"Ruby":       "ruby",
-			"Swift":      "swift",
-			"Kotlin":     "kotlinc",
-			"C#":         "csc",
-			"C":          "gcc",
-			"TypeScript": "tsc",
-		},
-		"Package Managers": {
-			"pip":      "pip3",
-			"npm":      "npm",
-			"yarn":     "yarn",
-			"pnpm":     "pnpm",
-			"cargo":    "cargo",
-			"maven":    "mvn",
-			"gradle":   "gradle",
-			"composer": "composer",
-			"make":     "make",
-			"cmake":    "cmake",
-			"bundler":  "bundle",
-			"brew":     "brew",
-			"apt":      "apt",
-		},
-		"Development Tools": {
-			"git":       "git",
-			"docker":    "docker",
-			"kubectl":   "kubectl",
-			"apache":    "apache2",
-			"nginx":     "nginx",
-			"terraform": "terraform",
-			"ansible":   "ansible",
-			"sqlite3":   "sqlite3",
-			"mysql":     "mysql",
-			"psql":      "psql",
-			"vscode":    "code",
-		},
-	}
-
-	result := &ScanResult{
-		Languages:       map[string]bool{},
-		PackageManagers: map[string]bool{},
-		DevTools:        map[string]bool{},
-	}
-
-	for category, tools := range categories {
-		for name, bin := range tools {
-			found := false
-
-			// Special case for VS Code - use custom detection
-			if name == "vscode" {
-				vscodePath := checkVSCode()
-				found = vscodePath != ""
-				result.VSCodePath = vscodePath
-			} else {
-				if _, err := exec.LookPath(bin); err == nil {
-					found = true
-				}
-			}
-
-			switch category {
-			case "Languages":
-				result.Languages[name] = found
-			case "Package Managers":
-				result.PackageManagers[name] = found
-			case "Development Tools":
-				result.DevTools[name] = found
-			}
+func (f Finder) collect(tools []Tool) []string {
+	out := []string{}
+	for _, t := range tools {
+		if f.found(t.Binary) {
+			out = append(out, t.Name)
 		}
 	}
-
-	return result
+	sort.Strings(out)
+	return out
 }
 
-// PrintResult prints the detected tools nicely
-func PrintResult(result *ScanResult) {
-	categories := map[string]map[string]bool{
-		"Languages":         result.Languages,
-		"Package Managers":  result.PackageManagers,
-		"Development Tools": result.DevTools,
+// Scan inspects the machine.
+func (f Finder) Scan() Result {
+	r := Result{
+		Languages:       f.collect(Catalog.Languages),
+		PackageManagers: f.collect(Catalog.PackageManagers),
+		DevTools:        f.collect(Catalog.DevTools),
+		VSCodePath:      f.VSCode(),
 	}
-
-	for category, tools := range categories {
-		fmt.Printf("=== %s ===\n", category)
-		names := make([]string, 0, len(tools))
-		for name := range tools {
-			names = append(names, name)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			if tools[name] {
-				fmt.Printf("✅ %-10s\n", name)
-			} else {
-				fmt.Printf("❌ %-10s\n", name)
-			}
-		}
-		fmt.Println()
-	}
+	return r
 }
 
-func SaveConfig(ScanResult *ScanResult) error {
-	// Convert maps to slices
-	installedLanguages := []string{}
-	for lang, found := range ScanResult.Languages {
-		if found {
-			installedLanguages = append(installedLanguages, lang)
-		}
+// Names returns every catalog entry for a category with whether it was found, in catalog order.
+func Names(tools []Tool, found []string) []Entry {
+	set := map[string]bool{}
+	for _, n := range found {
+		set[n] = true
 	}
+	out := make([]Entry, 0, len(tools))
+	for _, t := range tools {
+		out = append(out, Entry{Name: t.Name, Found: set[t.Name]})
+	}
+	return out
+}
 
-	installedPackageManagers := []string{}
-	for pm, found := range ScanResult.PackageManagers {
-		if found {
-			installedPackageManagers = append(installedPackageManagers, pm)
-		}
-	}
+// Entry is one catalog item and whether it was found.
+type Entry struct {
+	Name  string
+	Found bool
+}
 
-	installedDevTools := []string{}
-	for tool, found := range ScanResult.DevTools {
-		if found {
-			installedDevTools = append(installedDevTools, tool)
-		}
+// Apply stores a scan result in the config (it does not save the file).
+func Apply(cfg *config.Config, r Result) {
+	cfg.InstalledLanguages = r.Languages
+	cfg.InstalledPackageManagers = r.PackageManagers
+	cfg.InstalledDevTools = r.DevTools
+	if r.VSCodePath != "" {
+		cfg.VSCodePath = r.VSCodePath
 	}
-
-	// Save to config
-	if err := config.SetConfigValue("installed_languages", installedLanguages); err != nil {
-		return err
-	}
-	if err := config.SetConfigValue("installed_package_managers", installedPackageManagers); err != nil {
-		return err
-	}
-	if err := config.SetConfigValue("installed_dev_tools", installedDevTools); err != nil {
-		return err
-	}
-
-	// Save VS Code path if found
-	if ScanResult.VSCodePath != "" {
-		if err := config.SetConfigValue("vscode_path", ScanResult.VSCodePath); err != nil {
-			return err
-		}
-	}
-
-	return nil
 }
