@@ -1,0 +1,4 @@
+# Everything git would ignore stays out of the template
+__pycache__/
+*.pyc
+.venv/

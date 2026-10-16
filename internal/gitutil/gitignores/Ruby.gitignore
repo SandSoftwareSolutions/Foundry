@@ -1,0 +1,12 @@
+*.gem
+.bundle/
+vendor/bundle/
+log/
+tmp/
+coverage/
+
+# Environment and editors
+.env
+.idea/
+.vscode/
+.DS_Store

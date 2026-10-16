@@ -1,0 +1,18 @@
+# Build output
+target/
+build/
+out/
+*.class
+*.jar
+*.war
+
+# Gradle and Maven
+.gradle/
+!gradle/wrapper/gradle-wrapper.jar
+
+# Environment and editors
+.env
+.idea/
+*.iml
+.vscode/
+.DS_Store

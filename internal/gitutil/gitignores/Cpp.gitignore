@@ -1,0 +1,19 @@
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dylib
+*.dll
+*.exe
+build/
+out/
+cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+
+# Environment and editors
+.env
+.idea/
+.vscode/
+.DS_Store

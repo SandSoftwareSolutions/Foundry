@@ -1,117 +1,164 @@
-/*
-Copyright © 2025 NAME HERE <EMAIL ADDRESS>
-*/
+// Package cmd contains the Foundry command line interface.
 package cmd
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"os"
+	"os/signal"
+	"runtime"
 	"strings"
 
+	"github.com/SandSoftwareSolutions/Foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/detect"
+	"github.com/SandSoftwareSolutions/Foundry/internal/gitutil"
 	"github.com/fatih/color"
-	"github.com/kajvans/foundry/internal/config"
 	"github.com/spf13/cobra"
 )
 
-// rootCmd represents the base command when called without any subcommands
-var rootCmd = &cobra.Command{
-	Use:   "foundry",
-	Short: "Create new projects from templates and manage Foundry settings",
-	Long: `Foundry helps you scaffold new projects from your own templates and manage preferences.
+// Set at build time with -ldflags "-X github.com/SandSoftwareSolutions/Foundry/cmd.version=...".
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
 
-Key features:
-
-  - Detect installed languages and tools (git, docker, etc.)
-  - Save project templates and set per-language defaults
-  - Create new projects from a chosen template
-  - Interactive arrow-key menus for language and template selection
-  - Manage author, license, language defaults, and more
-
-Color output:
-  - Use --no-color to disable colored output
-  - Use --color to force colors (overrides NO_COLOR environment variable)
-  - Set NO_COLOR environment variable to disable colors globally
-
-Examples:
-
-  # Create a new Go project using the default Go template
-  foundry new my-api --language Go
-
-  # Create a new project using a specific saved template
-  foundry new my-app --template react-starter
-
-  # Interactively choose language and template
-  foundry new my-project
-
-  # View current configuration
-  foundry config Go
-
-  # Disable colored output
-  foundry template list --no-color
-`,
+// VersionString describes this build.
+func VersionString() string {
+	return fmt.Sprintf("%s (commit %s, built %s, %s/%s)", version, commit, date, runtime.GOOS, runtime.GOARCH)
 }
 
-// Execute adds all child commands to the root command and sets flags appropriately.
-// This is called by main.main(). It only needs to happen once to the rootCmd.
+// Execute runs the CLI and exits with a non-zero status on failure.
 func Execute() {
-	// Apply no-color flag early, before command execution
-	// Check for explicit --no-color=false or --color to re-enable colors
-	for _, arg := range os.Args {
-		if arg == "--color" {
-			color.NoColor = false
-			break
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	root := NewRootCmd()
+	if err := root.ExecuteContext(ctx); err != nil {
+		var usage *usageError
+		if !errors.As(err, &usage) || usage.show {
+			fmt.Fprintln(root.ErrOrStderr(), color.RedString("Error: ")+err.Error())
 		}
-		if arg == "--no-color" || arg == "-no-color" {
-			color.NoColor = true
-			break
-		}
-		// Check for --no-color=true or --no-color=false
-		if strings.HasPrefix(arg, "--no-color=") {
-			if strings.HasSuffix(arg, "=false") || strings.HasSuffix(arg, "=0") {
-				color.NoColor = false
-			} else if strings.HasSuffix(arg, "=true") || strings.HasSuffix(arg, "=1") {
-				color.NoColor = true
-			}
-			break
-		}
-	}
-
-	err := rootCmd.Execute()
-	if err != nil {
+		stop()
 		os.Exit(1)
 	}
 }
 
-func init() {
-	// Set version using Cobra's built-in Version field
-	rootCmd.Version = version
+// usageError marks a mistake in how a command was called.
+type usageError struct {
+	msg  string
+	show bool
+}
 
-	// Persistent flags
-	rootCmd.PersistentFlags().Bool("no-color", false, "Disable colored output")
-	rootCmd.PersistentFlags().Bool("color", false, "Force colored output (overrides NO_COLOR env)")
-	rootCmd.PersistentFlags().String("config", "", "Path to config file (overrides default)")
+func (e *usageError) Error() string { return e.msg }
 
-	// Respect NO_COLOR environment variable unless explicitly overridden
+func usagef(format string, a ...any) error {
+	return &usageError{msg: fmt.Sprintf(format, a...), show: true}
+}
+
+// NewRootCmd builds the whole command tree. It has no global state, so tests can build many.
+func NewRootCmd() *cobra.Command {
+	root := &cobra.Command{
+		Use:   "foundry",
+		Short: "Create new projects from your own templates",
+		Long: `Foundry scaffolds new projects from templates that you save once and reuse.
+
+  - Detects the languages and tools installed on your machine
+  - Saves directories as templates and remembers a default per language
+  - Creates a project with placeholders such as {{PROJECT_NAME}} filled in
+  - Initialises git with a sensible .gitignore and a first commit
+
+Colors:
+  --no-color disables colors, --color forces them; NO_COLOR is respected.`,
+		Example: `  foundry template add go-cli ./examples/go-cli
+  foundry config Go go-cli
+  foundry new my-api --language Go
+  foundry new my-site --template react-starter --var PORT=3000
+  foundry new my-tool --git https://github.com/you/template-repo
+  foundry new my-app --template go-cli --dry-run`,
+		Version:       VersionString(),
+		SilenceUsage:  true,
+		SilenceErrors: true,
+	}
+	root.SetVersionTemplate("foundry {{.Version}}\n")
+	root.PersistentFlags().Bool("no-color", false, "Disable colored output")
+	root.PersistentFlags().Bool("color", false, "Force colored output (overrides NO_COLOR)")
+	root.PersistentFlags().String("config", "", "Path of the config file (default ~/.foundry/config.yaml)")
+
+	root.PersistentPreRunE = func(cmd *cobra.Command, args []string) error {
+		applyColor(cmd)
+		if p, _ := cmd.Flags().GetString("config"); p != "" {
+			config.SetPathOverride(p)
+		}
+		if skipsFirstRun(cmd) {
+			return nil
+		}
+		return firstRun(cmd.ErrOrStderr())
+	}
+
+	root.AddCommand(newNewCmd(), newTemplateCmd(), newConfigCmd(), newDetectCmd(), newVersionCmd())
+	root.CompletionOptions.HiddenDefaultCmd = false
+	return root
+}
+
+// applyColor resolves --color, --no-color and NO_COLOR, in that order of precedence.
+func applyColor(cmd *cobra.Command) {
 	if v, ok := os.LookupEnv("NO_COLOR"); ok && strings.TrimSpace(v) != "" {
 		color.NoColor = true
 	}
-
-	// Use PersistentPreRun to apply global flags before any command runs
-	rootCmd.PersistentPreRun = func(cmd *cobra.Command, args []string) {
-		// no-color handling (flag takes precedence over env)
-		if cmd.Flags().Changed("no-color") {
-			nc, _ := cmd.Flags().GetBool("no-color")
-			color.NoColor = nc
-		}
-
-		// config path override
-		if cmd.Flags().Changed("config") {
-			path, _ := cmd.Flags().GetString("config")
-			if path != "" {
-				config.SetConfigPathOverride(path)
-			}
+	if f := cmd.Flags().Lookup("no-color"); f != nil && f.Changed {
+		on, _ := cmd.Flags().GetBool("no-color")
+		color.NoColor = on
+	}
+	if f := cmd.Flags().Lookup("color"); f != nil && f.Changed {
+		on, _ := cmd.Flags().GetBool("color")
+		if on {
+			color.NoColor = false
 		}
 	}
 }
 
-// version is injected via -ldflags at build time, defaults to "dev"
-var version = "dev"
+func skipsFirstRun(cmd *cobra.Command) bool {
+	for c := cmd; c != nil; c = c.Parent() {
+		switch c.Name() {
+		case "version", "help", "completion", cobra.ShellCompRequestCmd, cobra.ShellCompNoDescRequestCmd:
+			return true
+		}
+	}
+	return false
+}
+
+// firstRun creates the config file on the first use: it detects the installed tools and picks the
+// author name from git when available. Nothing is changed when the file already exists.
+func firstRun(errOut io.Writer) error {
+	if config.Exists() {
+		return nil
+	}
+	cfg := config.Default()
+	detect.Apply(cfg, detect.System().Scan())
+	cfg.Author = gitutil.GlobalUserName()
+	if err := config.Save(cfg); err != nil {
+		// A read-only home directory must not make every command fail.
+		fmt.Fprintln(errOut, color.YellowString("Warning: could not create the config file: %v", err))
+		return nil
+	}
+	p, _ := config.Path()
+	fmt.Fprintf(errOut, "First run: created %s (detected %d languages and %d tools).\n",
+		p, len(cfg.InstalledLanguages), len(cfg.InstalledDevTools))
+	if cfg.Author == "" {
+		fmt.Fprintln(errOut, "Set your name for {{AUTHOR}} with: foundry config --user \"Your Name\"")
+	}
+	return nil
+}
+
+func newVersionCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "version",
+		Short: "Print the version",
+		Args:  cobra.NoArgs,
+		Run: func(cmd *cobra.Command, args []string) {
+			fmt.Fprintf(cmd.OutOrStdout(), "foundry %s\n", VersionString())
+		},
+	}
+}

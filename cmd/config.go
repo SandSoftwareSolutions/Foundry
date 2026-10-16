@@ -1,174 +1,206 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
-	"os"
 	"sort"
 	"strings"
 
-	"github.com/kajvans/foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/config"
 	"github.com/spf13/cobra"
 )
 
-// configCmd represents the config command
-var configCmd = &cobra.Command{
-	Use:   "config [language] [template]",
-	Short: "View or update configuration settings",
-	Long: `View or update Foundry configuration.
+func newConfigCmd() *cobra.Command {
+	var (
+		user, license, defaultLang, clearDefault string
+		docker, interactiveMode                  bool
+		view, asJSON, showPath                   bool
+	)
+	cmd := &cobra.Command{
+		Use:   "config [language [template]]",
+		Short: "View or change settings and per-language default templates",
+		Long: `View or change Foundry's settings.
 
-You can set specific values directly via flags:
+Without arguments or flags the current configuration is shown. Set values with flags, or set the
+default template of a language with positional arguments:
 
-  --user <name>              Set the author name
-  --license <type>           Set the license (MIT, Apache, etc.)
-  --default-language <l>     Set the default language for new projects
-  --clear-default <lang>     Clear default template for a specific language
-  --docker                   Enable Dockerfile generation
-  --interactive              Enable interactive mode for project creation
-  --view                     Show current configuration settings
-
-To set a default template for a language, use positional arguments:
-  foundry config <language> <template-name>
-`,
-	Example: `  foundry config --user "John" --docker
-  foundry config --license Apache
-  foundry config Go my-go-template
-  foundry config Python flask-starter
-  foundry config --clear-default Go
-  foundry config --view`,
-	Args: cobra.MaximumNArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		config.PrintConfig()
-	},
+  foundry config <language> <template>     set the default template for a language
+  foundry config <language> ""             clear it again`,
+		Example: `  foundry config --user "Jane Doe" --license Apache-2.0
+  foundry config Go go-cli
+  foundry config Go ""
+  foundry config --clear-default Python
+  foundry config --json
+  foundry config --path`,
+		Args: cobra.MaximumNArgs(2),
+		ValidArgsFunction: func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+			cfg, err := config.Load()
+			if err != nil {
+				return nil, cobra.ShellCompDirectiveNoFileComp
+			}
+			var cands []string
+			switch len(args) {
+			case 0:
+				set := map[string]bool{"Go": true, "Python": true, "JavaScript": true, "TypeScript": true, "React": true, "Rust": true, "Java": true}
+				for _, l := range cfg.Languages() {
+					set[l] = true
+				}
+				for l := range set {
+					cands = append(cands, l)
+				}
+			case 1:
+				cands = templateNames(cfg)
+			}
+			var out []string
+			for _, c := range cands {
+				if strings.HasPrefix(strings.ToLower(c), strings.ToLower(toComplete)) {
+					out = append(out, c)
+				}
+			}
+			sort.Strings(out)
+			return out, cobra.ShellCompDirectiveNoFileComp
+		},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			out := cmd.OutOrStdout()
+			if showPath {
+				p, err := config.Path()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(out, p)
+				return nil
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			f := cmd.Flags()
+			changed := false
+			if len(args) >= 1 && !view {
+				template := ""
+				if len(args) == 2 {
+					template = args[1]
+				}
+				if len(args) == 1 {
+					return usagef("give a template name after the language (use \"\" to clear): foundry config %s <template>", args[0])
+				}
+				if err := cfg.SetLanguageDefault(args[0], template); err != nil {
+					return err
+				}
+				if template == "" {
+					okf(out, "Cleared the default template for %s", args[0])
+				} else {
+					okf(out, "Default template for %s: %s", args[0], template)
+				}
+				changed = true
+			}
+			if clearDefault != "" {
+				if err := cfg.SetLanguageDefault(clearDefault, ""); err != nil {
+					return err
+				}
+				okf(out, "Cleared the default template for %s", clearDefault)
+				changed = true
+			}
+			for _, s := range []struct{ flag, key, value string }{
+				{"user", "author", user}, {"license", "license", license}, {"default-language", "default_language", defaultLang},
+			} {
+				if f.Changed(s.flag) {
+					if err := cfg.Set(s.key, s.value); err != nil {
+						return err
+					}
+					changed = true
+				}
+			}
+			if f.Changed("docker") {
+				cfg.Docker = docker
+				changed = true
+			}
+			if f.Changed("interactive") {
+				cfg.Interactive = interactiveMode
+				changed = true
+			}
+			if changed {
+				if err := config.Save(cfg); err != nil {
+					return err
+				}
+			}
+			if changed && !asJSON && !view {
+				return nil // the confirmations above are enough; "foundry config" shows everything
+			}
+			return printConfig(cmd, cfg, asJSON)
+		},
+	}
+	f := cmd.Flags()
+	f.StringVar(&user, "user", "", "Set the author name ({{AUTHOR}})")
+	f.StringVar(&license, "license", "", "Set the license ({{LICENSE}})")
+	f.StringVar(&defaultLang, "default-language", "", "Set the default language")
+	f.BoolVar(&docker, "docker", false, "Enable or disable Docker support (--docker=false)")
+	f.BoolVar(&interactiveMode, "interactive", true, "Enable or disable interactive menus (--interactive=false)")
+	f.StringVar(&clearDefault, "clear-default", "", "Clear the default template of a language")
+	f.BoolVar(&view, "view", false, "Show the configuration (the default)")
+	f.BoolVar(&asJSON, "json", false, "Print as JSON")
+	f.BoolVar(&showPath, "path", false, "Print the location of the config file")
+	return cmd
 }
 
-func init() {
-	rootCmd.AddCommand(configCmd)
-
-	// Load current config
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to load config: %v\n", err)
-		cfg = &config.Config{} // fallback
-	}
-
-	// Define flags with defaults from config
-	configCmd.Flags().String("user", cfg.Author, "Set the author name")
-	configCmd.Flags().String("license", cfg.License, "Set the license type")
-	configCmd.Flags().String("default-language", cfg.DefaultLanguage, "Set the default language")
-	configCmd.Flags().Bool("docker", cfg.Docker, "Enable Dockerfile generation")
-	configCmd.Flags().Bool("interactive", cfg.Interactive, "Enable interactive mode")
-	configCmd.Flags().Bool("view", false, "Show current configuration settings")
-	configCmd.Flags().String("clear-default", "", "Clear default template for a specific language")
-
-	// TODO: Add a global --no-color flag (and respect NO_COLOR env) to disable colored output.
-	// TODO: Provide shell completions for <language> and <template> positional args.
-
-	// Provide smart completions for positional args: <language> and <template>
-	configCmd.ValidArgsFunction = func(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
-		// Load templates
-		tpls, err := config.ListTemplates()
-		if err != nil {
-			return nil, cobra.ShellCompDirectiveDefault
+func printConfig(cmd *cobra.Command, cfg *config.Config, asJSON bool) error {
+	out := cmd.OutOrStdout()
+	if asJSON {
+		type view struct {
+			Author           string            `json:"author"`
+			License          string            `json:"license"`
+			DefaultLanguage  string            `json:"default_language"`
+			Docker           bool              `json:"docker"`
+			Interactive      bool              `json:"interactive"`
+			Languages        []string          `json:"installed_languages"`
+			PackageManagers  []string          `json:"installed_package_managers"`
+			DevTools         []string          `json:"installed_dev_tools"`
+			VSCodePath       string            `json:"vscode_path"`
+			Templates        int               `json:"templates"`
+			LanguageDefaults map[string]string `json:"language_defaults"`
 		}
-		switch len(args) {
-		case 0:
-			// Suggest languages: unique set from templates plus some common values
-			langSet := map[string]struct{}{
-				"Go": {}, "Python": {}, "JavaScript": {}, "TypeScript": {}, "React": {}, "Rust": {}, "Java": {},
-			}
-			for _, t := range tpls {
-				if t.Language != "" {
-					langSet[t.Language] = struct{}{}
-				}
-			}
-			var langs []string
-			for l := range langSet {
-				if toComplete == "" || strings.HasPrefix(strings.ToLower(l), strings.ToLower(toComplete)) {
-					langs = append(langs, l)
-				}
-			}
-			sort.Strings(langs)
-			return langs, cobra.ShellCompDirectiveNoFileComp
-		case 1:
-			// Suggest template names
-			var names []string
-			for _, t := range tpls {
-				if toComplete == "" || strings.HasPrefix(strings.ToLower(t.Name), strings.ToLower(toComplete)) {
-					names = append(names, t.Name)
-				}
-			}
-			sort.Strings(names)
-			return names, cobra.ShellCompDirectiveNoFileComp
-		default:
-			return nil, cobra.ShellCompDirectiveNoFileComp
+		enc := json.NewEncoder(out)
+		enc.SetIndent("", "  ")
+		return enc.Encode(view{cfg.Author, cfg.License, cfg.DefaultLanguage, cfg.Docker, cfg.Interactive,
+			nz(cfg.InstalledLanguages), nz(cfg.InstalledPackageManagers), nz(cfg.InstalledDevTools), cfg.VSCodePath,
+			len(cfg.Templates), cfg.LanguageDefaults})
+	}
+	p, _ := config.Path()
+	fmt.Fprintf(out, "Config file:       %s\n", p)
+	fmt.Fprintf(out, "Author:            %s\n", orDash(cfg.Author))
+	fmt.Fprintf(out, "License:           %s\n", orDash(cfg.License))
+	fmt.Fprintf(out, "Default language:  %s\n", orDash(cfg.DefaultLanguage))
+	fmt.Fprintf(out, "Docker:            %t\n", cfg.Docker)
+	fmt.Fprintf(out, "Interactive:       %t\n", cfg.Interactive)
+	fmt.Fprintf(out, "Languages:         %s\n", orDash(strings.Join(cfg.InstalledLanguages, ", ")))
+	fmt.Fprintf(out, "Package managers:  %s\n", orDash(strings.Join(cfg.InstalledPackageManagers, ", ")))
+	fmt.Fprintf(out, "Dev tools:         %s\n", orDash(strings.Join(cfg.InstalledDevTools, ", ")))
+	fmt.Fprintf(out, "VS Code:           %s\n", orDash(cfg.VSCodePath))
+	fmt.Fprintf(out, "Templates:         %d saved\n", len(cfg.Templates))
+	if len(cfg.LanguageDefaults) > 0 {
+		fmt.Fprintln(out, "\nLanguage defaults:")
+		langs := make([]string, 0, len(cfg.LanguageDefaults))
+		for l := range cfg.LanguageDefaults {
+			langs = append(langs, l)
+		}
+		sort.Strings(langs)
+		for _, l := range langs {
+			fmt.Fprintf(out, "  %-14s %s\n", l, cfg.LanguageDefaults[l])
 		}
 	}
+	return nil
+}
 
-	// Run updates any flags passed
-	configCmd.Run = func(cmd *cobra.Command, args []string) {
-		if view, _ := cmd.Flags().GetBool("view"); view {
-			config.PrintConfig()
-			return
-		}
-
-		changed := false
-
-		// Handle set-default with positional arguments
-		// Usage: foundry config <language> <template>
-		if len(args) == 2 {
-			lang := args[0]
-			tmpl := args[1]
-			if err := config.SetLanguageDefault(lang, tmpl); err != nil {
-				fmt.Fprintf(os.Stderr, "Error setting default for %s: %v\n", lang, err)
-				os.Exit(1)
-			}
-			fmt.Printf("✓ Set default template for %s: %s\n", lang, tmpl)
-			changed = true
-		}
-
-		// Handle clear-default flag
-		if clearLang, _ := cmd.Flags().GetString("clear-default"); clearLang != "" {
-			if err := config.ClearLanguageDefault(clearLang); err != nil {
-				fmt.Fprintf(os.Stderr, "Error clearing default for %s: %v\n", clearLang, err)
-				os.Exit(1)
-			}
-			fmt.Printf("✓ Cleared default template for %s\n", clearLang)
-			changed = true
-		}
-
-		// Get flags and update config if they were provided
-		if user, _ := cmd.Flags().GetString("user"); user != "" && cmd.Flags().Changed("user") {
-			config.SetConfigValue("author", user)
-			changed = true
-		}
-		if license, _ := cmd.Flags().GetString("license"); license != "" && cmd.Flags().Changed("license") {
-			config.SetConfigValue("license", license)
-			changed = true
-		}
-		if lang, _ := cmd.Flags().GetString("default-language"); lang != "" && cmd.Flags().Changed("default-language") {
-			config.SetConfigValue("default_language", lang)
-			changed = true
-		}
-		if cmd.Flags().Changed("docker") {
-			docker, _ := cmd.Flags().GetBool("docker")
-			config.SetConfigValue("docker", docker)
-			changed = true
-		}
-		if cmd.Flags().Changed("interactive") {
-			interactive, _ := cmd.Flags().GetBool("interactive")
-			config.SetConfigValue("interactive", interactive)
-			changed = true
-		}
-
-		if !changed {
-			// No updates provided; show current configuration
-			config.PrintConfig()
-			return
-		}
-
-		fmt.Println("\nConfiguration updated. Current values:")
-		config.PrintConfig()
+func nz(s []string) []string {
+	if s == nil {
+		return []string{}
 	}
+	return s
+}
 
-	// Use default Cobra help which includes usage, flags, and examples
+func orDash(s string) string {
+	if strings.TrimSpace(s) == "" {
+		return "-"
+	}
+	return s
 }

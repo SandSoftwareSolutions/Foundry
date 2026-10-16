@@ -8,282 +8,446 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/fatih/color"
-	"github.com/kajvans/foundry/internal/config"
-	"github.com/kajvans/foundry/internal/template"
+	"github.com/SandSoftwareSolutions/Foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/render"
+	"github.com/SandSoftwareSolutions/Foundry/internal/template"
 	"github.com/spf13/cobra"
 )
 
-// templateCmd represents the template command
-var templateCmd = &cobra.Command{
-	Use:   "template",
-	Short: "Manage project templates",
-	Long: `Manage custom project templates for use with 'foundry new'.
-	
-Templates are detected automatically based on their file structure and extensions.
-You can add, list, and remove templates.`,
+func newTemplateCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     "template",
+		Aliases: []string{"templates", "t"},
+		Short:   "Manage saved templates",
+		Long: `Save directories as templates, list them, inspect them and keep them up to date.
+
+A template is a normal directory. Put a .foundryignore file in it to leave things out
+(same rules as .gitignore). node_modules, .git, vendor, dist, build, .venv and __pycache__ are
+always left out unless you re-include them with a rule such as "!build/".`,
+	}
+	cmd.AddCommand(newTemplateAddCmd(), newTemplateListCmd(), newTemplateShowCmd(), newTemplateRemoveCmd(),
+		newTemplateUpdateCmd(), newTemplateEditCmd(), newTemplateVarsCmd())
+	return cmd
 }
 
-// templateAddCmd adds a new template
-var templateAddCmd = &cobra.Command{
-	Use:   "add <name> <path>",
-	Short: "Add a new template from a directory",
-	Long: `Scan a directory and save it as a reusable template.
-	The language will be automatically detected based on file extensions.
-
-	You can override the detected language tag with --language to label frameworks like React or Vue.
-
-	Example:
-  foundry template add my-go-api ./my-api-template
-	foundry template add react-starter ~/templates/react-app --description "React with TypeScript" --language React`,
-	Args: cobra.MinimumNArgs(2),
-	Run: func(cmd *cobra.Command, args []string) {
-		name := args[0]
-		path := args[1]
-
-		// Validate that 'path' exists and is a directory
-		if info, err := os.Stat(path); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: cannot access path: %v\n", err)
-			os.Exit(1)
-		} else if !info.IsDir() {
-			fmt.Fprintf(os.Stderr, "Error: path is not a directory: %s\n", path)
-			os.Exit(1)
+func templateCompletion(cmd *cobra.Command, args []string, toComplete string) ([]string, cobra.ShellCompDirective) {
+	if len(args) > 0 {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, cobra.ShellCompDirectiveNoFileComp
+	}
+	var out []string
+	for _, n := range templateNames(cfg) {
+		if strings.HasPrefix(strings.ToLower(n), strings.ToLower(toComplete)) {
+			out = append(out, n)
 		}
-
-		description, _ := cmd.Flags().GetString("description")
-		overrideLang, _ := cmd.Flags().GetString("language")
-
-		// Validate template name
-		if err := template.ValidateName(name); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		// TODO: Support an optional ignore file (e.g., .foundryignore) when scanning to exclude files/dirs.
-		// Scan and create template
-		color.Cyan("Scanning template directory: %s", path)
-		tmpl, err := template.ScanTemplate(name, path, description)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error scanning template: %v\n", err)
-			os.Exit(1)
-		}
-
-		// If user provided an override language/framework tag, apply it
-		if strings.TrimSpace(overrideLang) != "" {
-			tmpl.Language = strings.TrimSpace(overrideLang)
-		}
-
-		color.Green("✓ Detected language: %s", tmpl.Language)
-		color.Green("✓ Found %d files", len(tmpl.Files))
-
-		// Save to config
-		configTmpl := config.Template{
-			Name:        tmpl.Name,
-			Path:        tmpl.Path,
-			Language:    tmpl.Language,
-			Description: tmpl.Description,
-			Files:       tmpl.Files,
-		}
-
-		if err := config.AddTemplate(configTmpl); err != nil {
-			fmt.Fprintf(os.Stderr, "Error saving template: %v\n", err)
-			os.Exit(1)
-		}
-
-		color.Green("\n✓ Template '%s' saved successfully!", name)
-		fmt.Printf("  Path: %s\n", tmpl.Path)
-		fmt.Printf("  Language: %s\n", tmpl.Language)
-		if description != "" {
-			fmt.Printf("  Description: %s\n", description)
-		}
-	},
+	}
+	return out, cobra.ShellCompDirectiveNoFileComp
 }
 
-// templateListCmd lists all saved templates
-var templateListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "List all saved templates",
-	Long:  `Display all templates that have been saved and are available for use with 'foundry new'.`,
-	Run: func(cmd *cobra.Command, args []string) {
-		templates, err := config.ListTemplates()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error loading templates: %v\n", err)
-			os.Exit(1)
-		}
+func newTemplateAddCmd() *cobra.Command {
+	var description, language string
+	cmd := &cobra.Command{
+		Use:   "add <name> <path>",
+		Short: "Save a directory as a template",
+		Long: `Scan a directory and save it as a template. The language is detected from the files;
+override it with --language, for example to tag a framework such as React or Vue.
+Adding a name that exists replaces that template.`,
+		Example: `  foundry template add go-cli ./examples/go-cli
+  foundry template add react-starter ~/templates/react --description "React with TypeScript" --language React`,
+		Args: cobra.ExactArgs(2),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name, path := args[0], args[1]
+			if err := template.ValidateName(name); err != nil {
+				return usagef("%v", err)
+			}
+			info, err := template.Scan(path)
+			if err != nil {
+				return err
+			}
+			if language = strings.TrimSpace(language); language != "" {
+				info.Language = language
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			_, existed := cfg.FindTemplate(name)
+			cfg.UpsertTemplate(config.Template{Name: name, Path: info.Path, Language: info.Language, Description: description, Files: info.Files})
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			out := cmd.OutOrStdout()
+			verb := "saved"
+			if existed {
+				verb = "updated"
+			}
+			okf(out, "Template %q %s", name, verb)
+			fmt.Fprintf(out, "  Path:     %s\n  Language: %s\n  Files:    %d\n", info.Path, info.Language, len(info.Files))
+			if description != "" {
+				fmt.Fprintf(out, "  About:    %s\n", description)
+			}
+			if len(info.Files) == 0 {
+				warnf(cmd.ErrOrStderr(), "The template has no files (check .foundryignore).")
+			}
+			return nil
+		},
+	}
+	cmd.Flags().StringVarP(&description, "description", "d", "", "Description of the template")
+	cmd.Flags().StringVarP(&language, "language", "l", "", "Override the detected language or framework tag")
+	return cmd
+}
 
-		if len(templates) == 0 {
-			fmt.Println("No templates saved yet.")
-			fmt.Println("\nAdd a template with: foundry template add <name> <path>")
-			return
-		}
-
-		// Sorting and quiet options
-		sortBy, _ := cmd.Flags().GetString("sort")
-		quiet, _ := cmd.Flags().GetBool("quiet")
-
-		switch sortBy {
-		case "language":
-			sort.Slice(templates, func(i, j int) bool {
-				if templates[i].Language == templates[j].Language {
-					return templates[i].Name < templates[j].Name
+func newTemplateListCmd() *cobra.Command {
+	var sortBy string
+	var quiet, asJSON bool
+	cmd := &cobra.Command{
+		Use:     "list",
+		Aliases: []string{"ls"},
+		Short:   "List saved templates",
+		Args:    cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if sortBy != "name" && sortBy != "language" {
+				return usagef("--sort must be name or language")
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			ts := sortedTemplates(cfg)
+			if sortBy == "language" {
+				sort.SliceStable(ts, func(i, j int) bool { return ts[i].Language < ts[j].Language })
+			}
+			out := cmd.OutOrStdout()
+			if asJSON {
+				type item struct {
+					config.Template
+					DefaultFor []string `json:"default_for"`
+					Exists     bool     `json:"exists"`
 				}
-				return templates[i].Language < templates[j].Language
-			})
-		default:
-			// name
-			sort.Slice(templates, func(i, j int) bool { return templates[i].Name < templates[j].Name })
-		}
-
-		if quiet {
-			for _, t := range templates {
-				fmt.Println(t.Name)
+				items := make([]item, 0, len(ts))
+				for _, t := range ts {
+					_, err := os.Stat(t.Path)
+					d := cfg.DefaultFor(t.Name)
+					if d == nil {
+						d = []string{}
+					}
+					t.Files = nil
+					items = append(items, item{Template: t, DefaultFor: d, Exists: err == nil})
+				}
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(items)
 			}
-			return
-		}
-
-		color.New(color.Bold).Printf("Saved Templates (%d):\n\n", len(templates))
-		for i, t := range templates {
-			fmt.Printf("%d. %s\n", i+1, t.Name)
-			fmt.Printf("   Language: %s\n", t.Language)
-			fmt.Printf("   Path: %s\n", t.Path)
-			if t.Description != "" {
-				fmt.Printf("   Description: %s\n", t.Description)
+			if len(ts) == 0 {
+				if !quiet {
+					fmt.Fprintln(out, "No templates saved yet.\nAdd one with: foundry template add <name> <path>")
+				}
+				return nil
 			}
-			fmt.Printf("   Files: %d\n", len(t.Files))
-
-			// Check if this is a default template for any language
-			defaultLangs := config.IsDefaultTemplate(t.Name)
-			if len(defaultLangs) > 0 {
-				color.Cyan("   ⭐ Default for: %v", defaultLangs)
+			if quiet {
+				for _, t := range ts {
+					fmt.Fprintln(out, t.Name)
+				}
+				return nil
 			}
-
-			// Check if path still exists
-			if _, err := os.Stat(t.Path); os.IsNotExist(err) {
-				color.Yellow("   ⚠  Warning: Path no longer exists")
+			boldf(out, "Saved templates (%d)\n", len(ts))
+			for _, t := range ts {
+				line := fmt.Sprintf("%-24s %-12s %s", t.Name, t.Language, t.Path)
+				fmt.Fprintln(out, line)
+				if t.Description != "" {
+					fmt.Fprintf(out, "    %s\n", t.Description)
+				}
+				if d := cfg.DefaultFor(t.Name); len(d) > 0 {
+					infof(out, "    default for: %s", strings.Join(d, ", "))
+				}
+				if _, err := os.Stat(t.Path); err != nil {
+					warnf(out, "    path no longer exists")
+				}
 			}
-			fmt.Println()
-		}
-	},
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&sortBy, "sort", "name", "Sort by name or language")
+	cmd.Flags().BoolVar(&quiet, "quiet", false, "Only print the names")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print as JSON")
+	return cmd
 }
 
-// templateRemoveCmd removes a template
-var templateRemoveCmd = &cobra.Command{
-	Use:   "remove <name>",
-	Short: "Remove a saved template",
-	Long:  `Remove a template from the saved templates list. This does not delete the actual files.`,
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		name := args[0]
-		// Warn if template is default for any language
-		force, _ := cmd.Flags().GetBool("force")
-		if langs := config.IsDefaultTemplate(name); len(langs) > 0 && !force {
-			fmt.Fprintf(os.Stderr, "Error: template '%s' is the default for: %v\nUse --force to remove it anyway.\n", name, langs)
-			os.Exit(1)
-		}
-
-		if err := config.RemoveTemplate(name); err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		color.Green("✓ Template '%s' removed successfully", name)
-	},
+func newTemplateShowCmd() *cobra.Command {
+	var filesOnly, summary, asJSON bool
+	cmd := &cobra.Command{
+		Use:               "show <name>",
+		Short:             "Show the details of a template",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: templateCompletion,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			t, ok := cfg.FindTemplate(args[0])
+			if !ok {
+				return notFound("template", args[0], templateNames(cfg))
+			}
+			out := cmd.OutOrStdout()
+			if asJSON {
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(t)
+			}
+			if !filesOnly {
+				fmt.Fprintf(out, "Template: %s\nLanguage: %s\nPath:     %s\n", t.Name, t.Language, t.Path)
+				if t.Description != "" {
+					fmt.Fprintf(out, "About:    %s\n", t.Description)
+				}
+				if d := cfg.DefaultFor(t.Name); len(d) > 0 {
+					infof(out, "Default for: %s", strings.Join(d, ", "))
+				}
+				if _, err := os.Stat(t.Path); err != nil {
+					warnf(out, "The template path no longer exists.")
+				}
+			}
+			if summary {
+				return nil
+			}
+			files := append([]string(nil), t.Files...)
+			sort.Strings(files)
+			fmt.Fprintf(out, "\nFiles (%d):\n", len(files))
+			byDir := map[string][]string{}
+			var dirs []string
+			for _, f := range files {
+				d := filepath.ToSlash(filepath.Dir(filepath.FromSlash(f)))
+				if d == "." {
+					d = "(root)"
+				}
+				if _, seen := byDir[d]; !seen {
+					dirs = append(dirs, d)
+				}
+				byDir[d] = append(byDir[d], filepath.Base(filepath.FromSlash(f)))
+			}
+			sort.Strings(dirs)
+			for _, d := range dirs {
+				fmt.Fprintf(out, "  %s\n", d)
+				for _, f := range byDir[d] {
+					fmt.Fprintf(out, "    %s\n", f)
+				}
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&filesOnly, "files-only", false, "Only print the files")
+	cmd.Flags().BoolVar(&summary, "summary", false, "Only print the details, not the files")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "Print as JSON")
+	return cmd
 }
 
-// templateShowCmd shows details of a specific template
-var templateShowCmd = &cobra.Command{
-	Use:   "show <name>",
-	Short: "Show details of a specific template",
-	Long:  `Display detailed information about a saved template, including all files.`,
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		name := args[0]
-
-		tmpl, err := config.GetTemplate(name)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-			os.Exit(1)
-		}
-
-		filesOnly, _ := cmd.Flags().GetBool("files-only")
-		summaryOnly, _ := cmd.Flags().GetBool("summary")
-		jsonOut, _ := cmd.Flags().GetBool("json")
-
-		if jsonOut {
-			// Print full template as JSON
-			enc := json.NewEncoder(cmd.OutOrStdout())
-			enc.SetIndent("", "  ")
-			_ = enc.Encode(tmpl)
-			return
-		}
-
-		if !filesOnly {
-			fmt.Printf("Template: %s\n", tmpl.Name)
-			fmt.Printf("Language: %s\n", tmpl.Language)
-			fmt.Printf("Path: %s\n", tmpl.Path)
-			if tmpl.Description != "" {
-				fmt.Printf("Description: %s\n", tmpl.Description)
+func newTemplateRemoveCmd() *cobra.Command {
+	var force bool
+	cmd := &cobra.Command{
+		Use:               "remove <name>",
+		Aliases:           []string{"rm"},
+		Short:             "Remove a saved template (the files stay)",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: templateCompletion,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
 			}
-		}
-
-		// Check if this is a default template for any language
-		defaultLangs := config.IsDefaultTemplate(name)
-		if len(defaultLangs) > 0 {
-			color.Cyan("Default for: %v\n", defaultLangs)
-		}
-
-		// Check if path exists
-		if !filesOnly {
-			if _, err := os.Stat(tmpl.Path); os.IsNotExist(err) {
-				color.Yellow("\n⚠  Warning: Template path no longer exists")
+			t, ok := cfg.FindTemplate(args[0])
+			if !ok {
+				return notFound("template", args[0], templateNames(cfg))
 			}
-		}
-
-		if summaryOnly {
-			return
-		}
-
-		fmt.Printf("\nFiles (%d):\n", len(tmpl.Files))
-
-		// Group files by directory
-		dirMap := make(map[string][]string)
-		for _, f := range tmpl.Files {
-			dir := filepath.Dir(f)
-			if dir == "." {
-				dir = "(root)"
+			name := t.Name
+			if d := cfg.DefaultFor(name); len(d) > 0 && !force {
+				return usagef("template %q is the default for: %s\nUse --force to remove it anyway (the defaults are cleared).", name, strings.Join(d, ", "))
 			}
-			dirMap[dir] = append(dirMap[dir], filepath.Base(f))
-		}
-
-		// Print grouped files
-		for dir, files := range dirMap {
-			fmt.Printf("\n  %s/\n", dir)
-			for _, file := range files {
-				fmt.Printf("    - %s\n", file)
+			cleared, err := cfg.RemoveTemplate(name)
+			if err != nil {
+				return err
 			}
-		}
-	},
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			okf(cmd.OutOrStdout(), "Template %q removed", name)
+			if len(cleared) > 0 {
+				infof(cmd.OutOrStdout(), "Cleared the default for: %s", strings.Join(cleared, ", "))
+			}
+			return nil
+		},
+	}
+	cmd.Flags().BoolVar(&force, "force", false, "Remove even if it is the default for a language")
+	return cmd
 }
 
-func init() {
-	rootCmd.AddCommand(templateCmd)
+func newTemplateUpdateCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "update [name...]",
+		Short: "Rescan templates so their file lists and languages are current",
+		Long: `Rescan the directory of each named template (or of all templates when no name is given).
+The description, and a language you set by hand, are kept.`,
+		ValidArgsFunction: templateCompletion,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			names := args
+			if len(names) == 0 {
+				names = templateNames(cfg)
+			}
+			out := cmd.OutOrStdout()
+			failed := 0
+			for _, n := range names {
+				t, ok := cfg.FindTemplate(n)
+				if !ok {
+					return notFound("template", n, templateNames(cfg))
+				}
+				info, err := template.Scan(t.Path)
+				if err != nil {
+					warnf(cmd.ErrOrStderr(), "%s: %v", t.Name, err)
+					failed++
+					continue
+				}
+				before := len(t.Files)
+				t.Files = info.Files
+				okf(out, "%s: %d files (was %d)", t.Name, len(info.Files), before)
+			}
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			if failed > 0 {
+				return fmt.Errorf("%d template(s) could not be rescanned", failed)
+			}
+			return nil
+		},
+	}
+}
 
-	// Add subcommands
-	templateCmd.AddCommand(templateAddCmd)
-	templateCmd.AddCommand(templateListCmd)
-	templateCmd.AddCommand(templateRemoveCmd)
-	templateCmd.AddCommand(templateShowCmd)
+func newTemplateEditCmd() *cobra.Command {
+	var description, language, path, rename string
+	cmd := &cobra.Command{
+		Use:               "edit <name>",
+		Short:             "Change the description, language, path or name of a template",
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: templateCompletion,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			f := cmd.Flags()
+			if !f.Changed("description") && !f.Changed("language") && !f.Changed("path") && !f.Changed("rename") {
+				return usagef("nothing to change: use --description, --language, --path or --rename")
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			t, ok := cfg.FindTemplate(args[0])
+			if !ok {
+				return notFound("template", args[0], templateNames(cfg))
+			}
+			if f.Changed("description") {
+				t.Description = description
+			}
+			if f.Changed("language") {
+				if strings.TrimSpace(language) == "" {
+					return usagef("--language cannot be empty")
+				}
+				t.Language = strings.TrimSpace(language)
+			}
+			if f.Changed("path") {
+				info, err := template.Scan(path)
+				if err != nil {
+					return err
+				}
+				t.Path, t.Files = info.Path, info.Files
+			}
+			if f.Changed("rename") {
+				if err := template.ValidateName(rename); err != nil {
+					return usagef("%v", err)
+				}
+				if other, exists := cfg.FindTemplate(rename); exists && other != t {
+					return fmt.Errorf("a template named %q already exists", rename)
+				}
+				old := t.Name
+				for lang, d := range cfg.LanguageDefaults {
+					if d == old {
+						cfg.LanguageDefaults[lang] = rename
+					}
+				}
+				t.Name = rename
+			}
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			okf(cmd.OutOrStdout(), "Template %q updated", t.Name)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&description, "description", "", "New description")
+	cmd.Flags().StringVar(&language, "language", "", "New language or framework tag")
+	cmd.Flags().StringVar(&path, "path", "", "New directory (rescanned)")
+	cmd.Flags().StringVar(&rename, "rename", "", "New name")
+	return cmd
+}
 
-	// Flags for add command
-	templateAddCmd.Flags().StringP("description", "d", "", "Description of the template")
-	templateAddCmd.Flags().StringP("language", "l", "", "Override detected language/framework tag (e.g., React, Vue)")
-	// Flags for show command
-	templateShowCmd.Flags().Bool("files-only", false, "Only print the file list")
-	templateShowCmd.Flags().Bool("summary", false, "Only print template metadata (no files)")
-	templateShowCmd.Flags().Bool("json", false, "Output template details in JSON format")
-	templateRemoveCmd.Flags().Bool("force", false, "Remove even if this template is set as default for a language")
-
-	// Flags for list command
-	templateListCmd.Flags().String("sort", "name", "Sort templates by: name or language")
-	templateListCmd.Flags().Bool("quiet", false, "Only print template names (one per line)")
+func newTemplateVarsCmd() *cobra.Command {
+	return &cobra.Command{
+		Use:   "vars <name>",
+		Short: "List the placeholders a template uses",
+		Long: `Scan the files and file names of a template for {{PLACEHOLDERS}} and say which are built in and
+which you must supply with --var KEY=VALUE.`,
+		Args:              cobra.ExactArgs(1),
+		ValidArgsFunction: templateCompletion,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			t, ok := cfg.FindTemplate(args[0])
+			if !ok {
+				return notFound("template", args[0], templateNames(cfg))
+			}
+			files, err := template.ListFiles(t.Path)
+			if err != nil {
+				return err
+			}
+			builtin := map[string]bool{}
+			for _, n := range render.BuiltinNames() {
+				builtin[n] = true
+			}
+			used := map[string]bool{}
+			for _, rel := range files {
+				for _, n := range render.Used(rel) {
+					used[n] = true
+				}
+				data, err := os.ReadFile(filepath.Join(t.Path, filepath.FromSlash(rel)))
+				if err != nil || strings.IndexByte(string(data[:min(len(data), 8000)]), 0) >= 0 {
+					continue
+				}
+				for _, n := range render.Used(string(data)) {
+					used[n] = true
+				}
+			}
+			var names []string
+			for n := range used {
+				names = append(names, n)
+			}
+			sort.Strings(names)
+			out := cmd.OutOrStdout()
+			if len(names) == 0 {
+				fmt.Fprintln(out, "This template uses no placeholders.")
+				return nil
+			}
+			for _, n := range names {
+				if builtin[n] {
+					fmt.Fprintf(out, "  %-24s built in\n", n)
+				} else {
+					fmt.Fprintf(out, "  %-24s needs --var %s=VALUE\n", n, n)
+				}
+			}
+			return nil
+		},
+	}
 }
