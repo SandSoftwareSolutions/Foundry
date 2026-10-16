@@ -5,6 +5,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-16
+
 ### Security
 - Post-create steps no longer go through `bash -lc` with the project directory pasted into the
   command line. A project name containing quotes could run arbitrary commands. Steps now start
