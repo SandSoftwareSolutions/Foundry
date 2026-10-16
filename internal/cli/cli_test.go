@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/SandSoftwareSolutions/Foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/render"
 	"github.com/SandSoftwareSolutions/Foundry/internal/template"
 	"github.com/fatih/color"
 )
@@ -528,5 +529,181 @@ func TestEmptyPostListMeansNoSetupSteps(t *testing.T) {
 	out := h.mustRun("new", "app", "--template", "no-setup", "--path", h.root, "--no-git")
 	if strings.Contains(out, "npm install") || strings.Contains(out, "Setup finished") {
 		t.Fatalf("an empty post list must run nothing: %s", out)
+	}
+}
+
+func TestDeclaredVarsUseDefaultsWhenNotAllowedToAsk(t *testing.T) {
+	h := newHarness(t)
+	dir := h.writeTemplate("with-vars", map[string]string{
+		"config.txt":      "port={{PORT}} name={{PROJECT_NAME}} token={{TOKEN}}\n",
+		template.MetaFile: "vars:\n  - name: PORT\n    prompt: Port\n    default: \"8080\"\n  - name: TOKEN\n    prompt: Token without a default\npost: []\n",
+	})
+	h.mustRun("template", "add", "with-vars", dir)
+
+	// A default fills in without asking; a declared var without a default stays unresolved and is reported.
+	out, errOut, err := h.run("new", "app", "--template", "with-vars", "--path", h.root, "--no-git", "--non-interactive")
+	if err != nil {
+		t.Fatalf("%v\n%s\n%s", err, out, errOut)
+	}
+	b, _ := os.ReadFile(filepath.Join(h.root, "app", "config.txt"))
+	if !strings.Contains(string(b), "port=8080") || !strings.Contains(string(b), "{{TOKEN}}") {
+		t.Fatalf("config.txt = %q", b)
+	}
+	if !strings.Contains(errOut, "TOKEN") {
+		t.Fatalf("the missing value must be reported: %q", errOut)
+	}
+
+	// --var wins over the default.
+	h.mustRun("new", "app2", "--template", "with-vars", "--path", h.root, "--no-git", "--non-interactive", "--var", "PORT=9000", "--var", "TOKEN=abc")
+	b, _ = os.ReadFile(filepath.Join(h.root, "app2", "config.txt"))
+	if string(b) != "port=9000 name=app2 token=abc\n" {
+		t.Fatalf("config.txt = %q", b)
+	}
+
+	// vars lists what is asked for.
+	if out := h.mustRun("template", "vars", "with-vars"); !strings.Contains(out, `asked for; default "8080"`) || !strings.Contains(out, "TOKEN") {
+		t.Fatalf("vars: %s", out)
+	}
+}
+
+func TestStrictStopsBeforeWritingAnything(t *testing.T) {
+	h := newHarness(t)
+	dir := h.writeTemplate("needs-port", map[string]string{"a.txt": "{{PORT}}\n"})
+	h.mustRun("template", "add", "needs-port", dir)
+	_, _, err := h.run("new", "app", "--template", "needs-port", "--path", h.root, "--no-git", "--strict")
+	if err == nil || !strings.Contains(err.Error(), "PORT") {
+		t.Fatalf("expected a strict error naming PORT, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(h.root, "app")); statErr == nil {
+		t.Fatal("nothing may be written when --strict stops the run")
+	}
+	h.mustRun("new", "app", "--template", "needs-port", "--path", h.root, "--no-git", "--strict", "--var", "PORT=1")
+}
+
+func TestFillDeclaredAsksOnlyForWhatIsMissing(t *testing.T) {
+	var asked []string
+	ask := func(name, prompt, def string) (string, error) {
+		asked = append(asked, name)
+		return "answer-" + name, nil
+	}
+	have := render.Vars{"A": "given"}
+	got, err := fillDeclared([]template.VarSpec{{Name: "A"}, {Name: "B", Default: "d"}, {Name: "C"}}, have, ask)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(asked, ",") != "B,C" || got["A"] != "given" || got["B"] != "answer-B" {
+		t.Fatalf("asked %v, got %v", asked, got)
+	}
+	if _, err := fillDeclared([]template.VarSpec{{Name: "bad name"}}, nil, nil); err == nil {
+		t.Fatal("an invalid declared name must be refused")
+	}
+	if have["B"] != "" {
+		t.Fatal("the input map must not be modified")
+	}
+}
+
+func TestTemplateInitCreatesAUsableSkeleton(t *testing.T) {
+	h := newHarness(t)
+	dir := filepath.Join(h.root, "skeleton")
+	out := h.mustRun("template", "init", dir, "--add", "mine", "--language", "Go", "--description", "Mine")
+	if !strings.Contains(out, "Created the template skeleton") || !strings.Contains(out, `Saved it as template "mine"`) {
+		t.Fatalf("output: %s", out)
+	}
+	for _, f := range []string{"README.md", "notes.txt", template.IgnoreFile, template.MetaFile} {
+		if _, err := os.Stat(filepath.Join(dir, f)); err != nil {
+			t.Fatalf("missing %s: %v", f, err)
+		}
+	}
+	// The skeleton works as a template straight away, and the commented .foundry.yaml is harmless.
+	h.mustRun("new", "demo", "--template", "mine", "--path", h.root, "--no-git")
+	b, _ := os.ReadFile(filepath.Join(h.root, "demo", "notes.txt"))
+	if !strings.Contains(string(b), "called demo (demo)") {
+		t.Fatalf("notes.txt: %q", b)
+	}
+	if _, err := os.Stat(filepath.Join(h.root, "demo", template.MetaFile)); err == nil {
+		t.Fatal("the meta file must not be copied")
+	}
+	if _, _, err := h.run("template", "init", dir); err == nil {
+		t.Fatal("init into a non-empty folder must fail")
+	}
+}
+
+func TestTemplateFromGitAddUpdateRunAndRemove(t *testing.T) {
+	if !gitAvailable() {
+		t.Skip("git is not installed")
+	}
+	h := newHarness(t)
+	repo := h.writeTemplate("remote-tpl", map[string]string{
+		"README.md":       "# {{PROJECT_NAME}}\n",
+		template.MetaFile: "post:\n  - go version\nnext:\n  - echo hello {{PROJECT_NAME}}\n",
+	})
+	if out, err := gitInitCommit(repo); err != nil {
+		t.Fatalf("%v: %s", err, out)
+	}
+	url := "file://" + filepath.ToSlash(repo)
+	if !strings.HasPrefix(url, "file:///") {
+		url = "file:///" + strings.TrimPrefix(url, "file://")
+	}
+
+	out := h.mustRun("template", "add", "team", url)
+	if !strings.Contains(out, `Template "team" saved`) {
+		t.Fatalf("add: %s", out)
+	}
+	show := h.mustRun("template", "show", "team", "--summary")
+	if !strings.Contains(show, "Source:") || !strings.Contains(show, "remote-tpl") {
+		t.Fatalf("show: %s", show)
+	}
+	cfg, _ := config.Load()
+	tpl, _ := cfg.FindTemplate("team")
+	if tpl.Source != url || !strings.Contains(tpl.Path, filepath.Join("templates", "team")) {
+		t.Fatalf("saved template: %+v", tpl)
+	}
+	copyDir := tpl.Path
+
+	// Setup commands of a template that came from Git are not run; its hints are shown.
+	made := h.mustRun("new", "app", "--template", "team", "--path", h.root, "--no-git")
+	if strings.Contains(made, "Run: go version") || strings.Contains(made, "Setup finished") {
+		t.Fatalf("setup commands from a Git template must not run: %s", made)
+	}
+	if !strings.Contains(made, "echo hello app") {
+		t.Fatalf("next hint missing: %s", made)
+	}
+
+	// A new commit upstream arrives with update.
+	if err := os.WriteFile(filepath.Join(repo, "extra.txt"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := gitOutput(repo, "add", "--all"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	if out, err := gitOutput(repo, "-c", "user.name=T", "-c", "user.email=t@example.com", "commit", "--quiet", "-m", "more"); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	h.mustRun("template", "update", "team")
+	cfg, _ = config.Load()
+	tpl, _ = cfg.FindTemplate("team")
+	found := false
+	for _, f := range tpl.Files {
+		found = found || f == "extra.txt"
+	}
+	if !found {
+		t.Fatalf("update did not bring the new file: %v", tpl.Files)
+	}
+
+	// Removing it also removes Foundry's own copy, but nothing else.
+	h.mustRun("template", "remove", "team")
+	if _, err := os.Stat(copyDir); err == nil {
+		t.Fatal("the copy Foundry made must be deleted")
+	}
+	if _, err := os.Stat(repo); err != nil {
+		t.Fatal("the original repository must stay")
+	}
+}
+
+func TestBranchFlagNeedsAGitAddress(t *testing.T) {
+	h := newHarness(t)
+	dir := h.writeTemplate("plain", map[string]string{"a.txt": "x"})
+	if _, _, err := h.run("template", "add", "plain", dir, "--branch", "main"); err == nil {
+		t.Fatal("--branch with a directory must be refused")
 	}
 }

@@ -5,6 +5,20 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-16
+
+### Added
+- **Placeholders are asked for.** A template can declare them in `.foundry.yaml` (`vars:` with a prompt and a
+  default); in a terminal Foundry asks, with `--non-interactive` the default is used, and any other used-but-missing
+  placeholder is asked for too. `--strict` stops before writing anything when a placeholder has no value, which is
+  what you want in CI.
+- `foundry template init <folder>` creates the skeleton of a new template (`--add` saves it right away).
+- `foundry template add <name> <git-address>` keeps a copy of a template from Git (`--branch`);
+  `template update` fast-forwards it, `template remove` deletes the copy. Setup commands of such templates are
+  never run.
+- The `.deb` packages install shell completions for bash, zsh and fish.
+- `foundry template show` and `template vars` show the source of a template and the placeholders that are asked for.
+
 ## [0.4.0] - 2026-10-16
 
 ### Added

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/SandSoftwareSolutions/Foundry/internal/config"
+	"github.com/SandSoftwareSolutions/Foundry/internal/gitutil"
 	"github.com/SandSoftwareSolutions/Foundry/internal/render"
 	"github.com/SandSoftwareSolutions/Foundry/internal/template"
 	"github.com/SandSoftwareSolutions/Foundry/templates"
@@ -28,7 +29,7 @@ right away and save your own next to them. A template is a normal directory. Put
 always left out unless you re-include them with a rule such as "!build/".`,
 	}
 	cmd.AddCommand(newTemplateAddCmd(), newTemplateListCmd(), newTemplateShowCmd(), newTemplateRemoveCmd(),
-		newTemplateUpdateCmd(), newTemplateEditCmd(), newTemplateVarsCmd(), newTemplateExportCmd())
+		newTemplateUpdateCmd(), newTemplateEditCmd(), newTemplateVarsCmd(), newTemplateExportCmd(), newTemplateInitCmd())
 	return cmd
 }
 
@@ -50,20 +51,44 @@ func templateCompletion(cmd *cobra.Command, args []string, toComplete string) ([
 }
 
 func newTemplateAddCmd() *cobra.Command {
-	var description, language string
+	var description, language, branch string
 	cmd := &cobra.Command{
-		Use:   "add <name> <path>",
-		Short: "Save a directory as a template",
+		Use:   "add <name> <path-or-git-url>",
+		Short: "Save a directory or a Git repository as a template",
 		Long: `Scan a directory and save it as a template. The language is detected from the files;
 override it with --language, for example to tag a framework such as React or Vue.
-Adding a name that exists replaces that template.`,
-		Example: `  foundry template add go-cli ./examples/go-cli
-  foundry template add react-starter ~/templates/react --description "React with TypeScript" --language React`,
+Adding a name that exists replaces that template.
+
+Give a Git address instead of a directory and Foundry keeps its own copy in its config folder; refresh it with
+"foundry template update". Setup commands (.foundry.yaml "post") of a template from Git are never run.`,
+		Example: `  foundry template add go-cli ./my-go-template
+  foundry template add react-starter ~/templates/react --description "React with TypeScript" --language React
+  foundry template add team-api https://github.com/acme/api-template --branch main`,
 		Args: cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name, path := args[0], args[1]
 			if err := template.ValidateName(name); err != nil {
 				return usagef("%v", err)
+			}
+			source := ""
+			if gitutil.IsURL(path) {
+				if !gitutil.Available() {
+					return fmt.Errorf("git is required to add a template from a Git address but was not found on PATH")
+				}
+				dest, err := templateFolder(name)
+				if err != nil {
+					return err
+				}
+				if err := os.RemoveAll(dest); err != nil {
+					return err
+				}
+				infof(cmd.OutOrStdout(), "Fetching %s ...", path)
+				if err := gitutil.Clone(cmd.Context(), path, branch, dest); err != nil {
+					return fmt.Errorf("cannot fetch the template: %w", err)
+				}
+				source, path = path, dest
+			} else if branch != "" {
+				return usagef("--branch only works with a Git address")
 			}
 			info, err := template.Scan(path)
 			if err != nil {
@@ -77,7 +102,7 @@ Adding a name that exists replaces that template.`,
 				return err
 			}
 			_, existed := cfg.FindTemplate(name)
-			cfg.UpsertTemplate(config.Template{Name: name, Path: info.Path, Language: info.Language, Description: description, Files: info.Files})
+			cfg.UpsertTemplate(config.Template{Name: name, Path: info.Path, Language: info.Language, Description: description, Files: info.Files, Source: source, Ref: branch})
 			if err := config.Save(cfg); err != nil {
 				return err
 			}
@@ -99,7 +124,17 @@ Adding a name that exists replaces that template.`,
 	}
 	cmd.Flags().StringVarP(&description, "description", "d", "", "Description of the template")
 	cmd.Flags().StringVarP(&language, "language", "l", "", "Override the detected language or framework tag")
+	cmd.Flags().StringVar(&branch, "branch", "", "Branch or tag to fetch (with a Git address)")
 	return cmd
+}
+
+// templateFolder is where Foundry keeps its own copies of templates fetched from Git.
+func templateFolder(name string) (string, error) {
+	p, err := config.Path()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(p), "templates", name), nil
 }
 
 func newTemplateListCmd() *cobra.Command {
@@ -249,6 +284,9 @@ func newTemplateShowCmd() *cobra.Command {
 					fmt.Fprintf(out, "Template: %s (built-in)\nLanguage: %s\n", t.Name, t.Language)
 				} else {
 					fmt.Fprintf(out, "Template: %s\nLanguage: %s\nPath:     %s\n", t.Name, t.Language, t.Path)
+					if t.Source != "" {
+						fmt.Fprintf(out, "Source:   %s\n", t.Source)
+					}
 				}
 				if t.Description != "" {
 					fmt.Fprintf(out, "About:    %s\n", t.Description)
@@ -318,12 +356,21 @@ func newTemplateRemoveCmd() *cobra.Command {
 			if d := cfg.DefaultFor(name); len(d) > 0 && !force {
 				return usagef("template %q is the default for: %s\nUse --force to remove it anyway (the defaults are cleared).", name, strings.Join(d, ", "))
 			}
+			removedCopy := ""
+			if t.Source != "" {
+				if base, err := templateFolder(""); err == nil && isInside(base, t.Path) {
+					removedCopy = t.Path
+				}
+			}
 			cleared, err := cfg.RemoveTemplate(name)
 			if err != nil {
 				return err
 			}
 			if err := config.Save(cfg); err != nil {
 				return err
+			}
+			if removedCopy != "" {
+				_ = os.RemoveAll(removedCopy)
 			}
 			okf(cmd.OutOrStdout(), "Template %q removed", name)
 			if len(cleared) > 0 {
@@ -361,6 +408,13 @@ The description, and a language you set by hand, are kept.`,
 						return builtinChangeError(e.Name)
 					}
 					return notFound("template", n, templateNames(cfg))
+				}
+				if t.Source != "" {
+					if err := gitutil.Pull(cmd.Context(), t.Path); err != nil {
+						warnf(cmd.ErrOrStderr(), "%s: cannot update from %s: %v", t.Name, t.Source, err)
+						failed++
+						continue
+					}
 				}
 				info, err := template.Scan(t.Path)
 				if err != nil {
@@ -504,10 +558,21 @@ which you must supply with --var KEY=VALUE.`,
 				fmt.Fprintln(out, "This template uses no placeholders.")
 				return nil
 			}
+			declared := map[string]template.VarSpec{}
+			if meta, err := template.LoadMeta(t.Path); err == nil {
+				for _, v := range meta.Vars {
+					declared[v.Name] = v
+				}
+			}
 			for _, n := range names {
-				if builtin[n] {
+				switch spec, isDeclared := declared[n]; {
+				case builtin[n]:
 					fmt.Fprintf(out, "  %-24s built in\n", n)
-				} else {
+				case isDeclared && spec.Default != "":
+					fmt.Fprintf(out, "  %-24s asked for; default %q (or --var %s=VALUE)\n", n, spec.Default, n)
+				case isDeclared:
+					fmt.Fprintf(out, "  %-24s asked for (or --var %s=VALUE)\n", n, n)
+				default:
 					fmt.Fprintf(out, "  %-24s needs --var %s=VALUE\n", n, n)
 				}
 			}
@@ -546,4 +611,94 @@ as your own template with "foundry template add".`,
 			return nil
 		},
 	}
+}
+
+// isInside reports whether path is below base (so Foundry never deletes a folder it did not create).
+func isInside(base, path string) bool {
+	rel, err := filepath.Rel(filepath.Clean(base), filepath.Clean(path))
+	return err == nil && rel != "." && !strings.HasPrefix(rel, "..")
+}
+
+func newTemplateInitCmd() *cobra.Command {
+	var addAs, language, description string
+	cmd := &cobra.Command{
+		Use:   "init <folder>",
+		Short: "Create the skeleton of a new template",
+		Long: `Create a folder with the files every template needs: a README that uses placeholders, a .foundry.yaml that
+shows the setup options (commented out), a .foundryignore and an example file. Fill it with your own files,
+then save it with "foundry template add" (or pass --add <name> to do that right away).`,
+		Example: `  foundry template init ./my-template
+  foundry template init ./my-api --add my-api --language Go --description "Our Go API"`,
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			dir := args[0]
+			if addAs != "" {
+				if err := template.ValidateName(addAs); err != nil {
+					return usagef("%v", err)
+				}
+			}
+			if entries, err := os.ReadDir(dir); err == nil && len(entries) > 0 {
+				return usagef("%q already exists and is not empty", dir)
+			}
+			files := map[string]string{
+				"README.md":         "# {{PROJECT_NAME}}\n\nCreated from a Foundry template by {{AUTHOR}} on {{DATE}}.\n\nDescribe what this project is for and how to run it.\n",
+				"notes.txt":         "This file shows placeholders: the project is called {{PROJECT_NAME}} ({{PROJECT_NAME_KEBAB}}), made in {{YEAR}}.\nDelete it and add your own files.\n",
+				template.IgnoreFile: "# Files and folders that are left out of the template, one pattern per line (same rules as .gitignore).\n# Always left out: .git, node_modules, .venv, __pycache__, vendor, dist, build.\n# Re-include one with a rule such as: !build/\n",
+				template.MetaFile: `# Optional. What Foundry does after it created a project from this template.
+#
+# Placeholders to ask for. With --non-interactive the default is used; without a default it must be given with --var.
+# vars:
+#   - name: PORT
+#     prompt: Port the service listens on
+#     default: "8080"
+#
+# Setup commands, run in the new project. One program per line, no shell (no &&, pipes or $VARIABLES).
+# "post: []" means: no setup at all. They are not run for templates that come from a Git address.
+# post:
+#   - go mod tidy
+#
+# What to tell the user to do next.
+# next:
+#   - go run .
+`,
+			}
+			for rel, content := range files {
+				p := filepath.Join(dir, rel)
+				if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+					return err
+				}
+				if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+					return err
+				}
+			}
+			out := cmd.OutOrStdout()
+			okf(out, "Created the template skeleton in %s", dir)
+			if addAs == "" {
+				fmt.Fprintf(out, "  Next: add your files, then  foundry template add <name> %s\n", dir)
+				return nil
+			}
+			info, err := template.Scan(dir)
+			if err != nil {
+				return err
+			}
+			if strings.TrimSpace(language) != "" {
+				info.Language = strings.TrimSpace(language)
+			}
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			cfg.UpsertTemplate(config.Template{Name: addAs, Path: info.Path, Language: info.Language, Description: description, Files: info.Files})
+			if err := config.Save(cfg); err != nil {
+				return err
+			}
+			okf(out, "Saved it as template %q (language %s)", addAs, info.Language)
+			fmt.Fprintf(out, "  Try it: foundry new demo --template %s --dry-run\n", addAs)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&addAs, "add", "", "Also save the new template under this name")
+	cmd.Flags().StringVarP(&language, "language", "l", "", "Language tag for --add")
+	cmd.Flags().StringVarP(&description, "description", "d", "", "Description for --add")
+	return cmd
 }

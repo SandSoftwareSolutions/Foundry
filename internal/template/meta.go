@@ -14,15 +14,28 @@ import (
 // from it. It is never copied into the project.
 const MetaFile = ".foundry.yaml"
 
+// VarSpec declares a placeholder a template needs, so Foundry can ask for it (or use the default when it is
+// not allowed to ask).
+type VarSpec struct {
+	Name    string `yaml:"name"`
+	Prompt  string `yaml:"prompt"`
+	Default string `yaml:"default"`
+}
+
 // Meta is the content of MetaFile.
 //
+//	vars:            # placeholders to ask for
+//	  - name: PORT
+//	    prompt: Port the service listens on
+//	    default: "8080"
 //	post:            # commands to run in the new project, one per line, no shell syntax
 //	  - pnpm install
 //	next:            # what to tell the user to do next (shown at the end)
 //	  - pnpm dev
 type Meta struct {
-	Post []string `yaml:"post"`
-	Next []string `yaml:"next"`
+	Vars []VarSpec `yaml:"vars"`
+	Post []string  `yaml:"post"`
+	Next []string  `yaml:"next"`
 }
 
 // LoadMeta reads the template's MetaFile. A missing file gives an empty Meta.

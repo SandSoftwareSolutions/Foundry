@@ -26,7 +26,7 @@ const pageSize = 10
 type newOptions struct {
 	language, templateName, gitURL, branch, path string
 	noGit, noPost, noOpen, nonInteractive        bool
-	dryRun, asJSON                               bool
+	dryRun, asJSON, strict                       bool
 	vars                                         []string
 }
 
@@ -71,6 +71,7 @@ Placeholders: {{PROJECT_NAME}}, {{PROJECT_NAME_LOWER}}, {{PROJECT_NAME_UPPER}}, 
 	f.BoolVar(&o.nonInteractive, "non-interactive", false, "Never prompt; require --template, --language or --git")
 	f.StringArrayVar(&o.vars, "var", nil, "Placeholder value as KEY=VALUE (repeatable)")
 	f.BoolVar(&o.dryRun, "dry-run", false, "Show what would be created without writing anything")
+	f.BoolVar(&o.strict, "strict", false, "Stop (before writing anything) when a placeholder has no value")
 	f.BoolVar(&o.asJSON, "json", false, "With --dry-run: print the plan as JSON")
 	return cmd
 }
@@ -142,16 +143,46 @@ func runNew(cmd *cobra.Command, name string, o newOptions) error {
 		if tmpl.Description != "" && isBuiltinName(tmpl.Name, cfg) {
 			label = tmpl.Name + " (built-in)"
 		}
-		src = source{dir: tmpl.Path, language: tmpl.Language, label: label}
+		src = source{fromGit: tmpl.Source != "", dir: tmpl.Path, language: tmpl.Language, label: label}
 	}
 
-	plan, err := project.BuildPlan(project.Options{
-		TemplateDir: src.dir, Name: name, TargetDir: target,
-		Author: cfg.Author, License: cfg.License, Vars: vars,
-	})
+	meta := loadMeta(cmd, src)
+	// Ask only on a terminal, and never when the output must be machine readable.
+	var ask asker
+	if !o.nonInteractive && !o.asJSON && cfg.Interactive && interactive() {
+		ask = surveyAsk
+	}
+	vars, err = fillDeclared(meta.Vars, vars, ask)
 	if err != nil {
 		return err
 	}
+	build := func(v render.Vars) (*project.Plan, error) {
+		return project.BuildPlan(project.Options{
+			TemplateDir: src.dir, Name: name, TargetDir: target,
+			Author: cfg.Author, License: cfg.License, Vars: v,
+		})
+	}
+	plan, err := build(vars)
+	if err != nil {
+		return err
+	}
+	if missing := unresolvedNames(plan); len(missing) > 0 {
+		switch {
+		case ask != nil:
+			if vars, err = askMissing(missing, vars, ask); err != nil {
+				return err
+			}
+			if plan, err = build(vars); err != nil {
+				return err
+			}
+		case o.strict:
+			return strictError(plan)
+		}
+	}
+	if o.strict && len(plan.Unresolved) > 0 {
+		return strictError(plan)
+	}
+	meta = renderMeta(meta, plan.Vars)
 
 	if o.dryRun {
 		return printDryRun(out, plan, src, target, o.asJSON)
@@ -173,7 +204,6 @@ func runNew(cmd *cobra.Command, name string, o newOptions) error {
 		}
 	}
 
-	meta := renderMeta(loadMeta(cmd, src), plan.Vars)
 	runPost(cmd, o, src.language, target, meta)
 	setupGit(cmd, o, cfg, src.language, target)
 	maybeOpenEditor(cmd, o, cfg, target)
@@ -208,7 +238,7 @@ func loadMeta(cmd *cobra.Command, src source) template.Meta {
 	}
 	if src.fromGit && meta.Post != nil {
 		infof(cmd.OutOrStdout(), "The template repository lists setup commands; they are not run for a template fetched with --git.")
-		return template.Meta{Next: meta.Next}
+		return template.Meta{Vars: meta.Vars, Next: meta.Next}
 	}
 	return meta
 }

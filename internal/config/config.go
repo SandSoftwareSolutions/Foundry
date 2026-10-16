@@ -21,6 +21,10 @@ type Template struct {
 	Language    string   `yaml:"language" json:"language"`
 	Description string   `yaml:"description" json:"description"`
 	Files       []string `yaml:"files,omitempty" json:"files,omitempty"`
+	// Source is the Git address a template was fetched from (empty for a directory the user pointed at). Such a
+	// template lives in Foundry's own folder and is refreshed with "foundry template update".
+	Source string `yaml:"source,omitempty" json:"source,omitempty"`
+	Ref    string `yaml:"ref,omitempty" json:"ref,omitempty"`
 }
 
 // Config is the content of ~/.foundry/config.yaml.
