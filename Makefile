@@ -5,7 +5,7 @@ COMMIT   ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE     ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 LDFLAGS  := -s -w -X $(MODULE)/cmd.version=$(VERSION) -X $(MODULE)/cmd.commit=$(COMMIT) -X $(MODULE)/cmd.date=$(DATE)
 
-.PHONY: all build test race cover vet fmt fmt-check check smoke dist install clean
+.PHONY: all build test race cover vet fmt fmt-check check lint vuln smoke dist install clean
 
 all: check build
 
@@ -31,8 +31,15 @@ fmt:
 fmt-check:
 	@test -z "$$(gofmt -l .)" || (echo "These files need gofmt:"; gofmt -l .; exit 1)
 
-# What CI runs.
+# What CI runs (the quick part).
 check: fmt-check vet test
+
+# Static analysis and known-vulnerability scan; they download the tools on first use.
+lint:
+	go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+
+vuln:
+	go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
 smoke: build
 	FOUNDRY_BIN=$(CURDIR)/foundry scripts/smoke-test.sh

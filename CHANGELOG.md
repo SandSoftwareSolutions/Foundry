@@ -33,6 +33,10 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - `.gitignore` files are built in. No `curl` and no network are needed.
 
 ### Added
+- CI/CD: test matrix (Linux, macOS, Windows; oldest and newest Go) with the race detector and coverage,
+  gofmt, vet, `go mod tidy` check, staticcheck, govulncheck, cross-compile check, end-to-end smoke
+  test, CodeQL, Dependabot, and a tag-driven release workflow that builds archives and `.deb`
+  packages, attests build provenance and creates a draft release. See `docs/releasing.md`.
 - `foundry template update`, `edit` and `vars`; `foundry version`; `foundry config --json --path`.
 - `foundry new --dry-run --json`, `--branch`, `--no-open`; warnings for placeholders without a value.
 - Placeholders `{{LICENSE}}`, `{{YEAR}}`, `{{DATE}}` and `{{PROJECT_NAME_SNAKE|KEBAB|PASCAL|CAMEL}}`.
@@ -43,6 +47,8 @@ and versions follow [Semantic Versioning](https://semver.org/).
 - Cross-platform release script (`scripts/dist.sh`) and `Makefile`.
 
 ### Changed
+- Minimum Go version is now 1.25 (needed for the patched `golang.org/x/sys`; older Go releases are out of support).
+- Dependencies updated: `golang.org/x/text` and `golang.org/x/sys` (govulncheck reported vulnerabilities in the old versions; the code did not call them).
 - The Go module path is now `github.com/SandSoftwareSolutions/Foundry`.
 - Library code lives under `internal/`; commands return errors instead of exiting.
 - Build scripts no longer rewrite source files or contain machine specific paths.

@@ -85,7 +85,7 @@ func ValidateName(name string) error {
 	case name != strings.TrimSpace(name):
 		return errors.New("project name cannot start or end with spaces")
 	case name == "." || name == "..":
-		return errors.New("project name cannot be . or ..")
+		return errors.New("project name cannot be a single or double dot")
 	case strings.ContainsAny(name, `/\`):
 		return errors.New("project name cannot contain a path separator; use --path to choose the parent directory")
 	case strings.ContainsAny(name, `:*?"<>|`+"\x00"):

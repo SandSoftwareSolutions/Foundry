@@ -30,7 +30,7 @@ Creating project "my-api" from go-cli
 
 ## Install
 
-**With Go** (1.22 or newer):
+**With Go** (1.25 or newer):
 
 ```console
 go install github.com/SandSoftwareSolutions/Foundry@latest

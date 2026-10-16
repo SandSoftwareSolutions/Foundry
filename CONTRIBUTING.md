@@ -11,11 +11,11 @@ cd Foundry
 make check
 ```
 
-You need Go 1.22 or newer and git.
+You need Go 1.25 or newer and git. `make lint` (staticcheck) and `make vuln` (govulncheck) run what CI runs.
 
 ## Before you open a pull request
 
-- `make check` passes (gofmt, `go vet`, tests).
+- `make check` passes (gofmt, `go vet`, tests); `make lint` is clean.
 - New behaviour has a test. Package tests live next to the code; command line behaviour is tested in
   `cmd/cli_test.go` with a throw-away config file, so tests never touch your real `~/.foundry`.
 - User visible changes get a line in `CHANGELOG.md` under *Unreleased*.

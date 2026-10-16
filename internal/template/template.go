@@ -173,7 +173,7 @@ func ValidateName(name string) error {
 	case strings.ContainsAny(name, `/\:*?"<>|`):
 		return errors.New(`template name cannot contain any of / \ : * ? " < > |`)
 	case name == "." || name == "..":
-		return errors.New("template name cannot be . or ..")
+		return errors.New("template name cannot be a single or double dot")
 	}
 	return nil
 }
