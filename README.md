@@ -30,6 +30,19 @@ Creating project "my-api" from go-cli
 
 ## Install
 
+**Debian, Ubuntu and derivatives (apt):**
+
+```console
+sudo install -d -m 0755 /etc/apt/keyrings
+curl -fsSL https://sandsoftwaresolutions.github.io/apt/key.asc | sudo tee /etc/apt/keyrings/sandsoftwaresolutions.asc >/dev/null
+echo "deb [signed-by=/etc/apt/keyrings/sandsoftwaresolutions.asc] https://sandsoftwaresolutions.github.io/apt stable main" | sudo tee /etc/apt/sources.list.d/sandsoftwaresolutions.list
+sudo apt update
+sudo apt install foundry
+```
+
+Updates then arrive with `sudo apt upgrade`. The repository is signed; see
+[SandSoftwareSolutions/apt](https://github.com/SandSoftwareSolutions/apt).
+
 **With Go** (1.25 or newer):
 
 ```console
