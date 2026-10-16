@@ -98,11 +98,6 @@ docker-compose.override.yml
 **/local-*.json
 *.local.*
 
-scripts/
-*.sh
-*.ps1
-
-.github/workflows/
 # Local build and test output
 /foundry
 /foundry.exe
