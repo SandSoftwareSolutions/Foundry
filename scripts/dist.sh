@@ -67,7 +67,7 @@ Version: ${VERSION#v}
 Section: devel
 Priority: optional
 Architecture: $arch
-Maintainer: Sand Software Solutions <info@sandsoftwaresolutions.nl>
+Maintainer: Sand Software Solutions <info@sandsoftwaresolutions.com>
 Description: Create new projects from your own templates
  Foundry saves directories as templates and scaffolds new projects from them,
  with placeholders, ignore rules and a first git commit.

@@ -3,7 +3,7 @@
 ## Reporting a vulnerability
 
 Please report security problems privately, not in a public issue. Use GitHub's "Report a
-vulnerability" button on the Security tab of this repository, or email info@sandsoftwaresolutions.nl.
+vulnerability" button on the Security tab of this repository, or email info@sandsoftwaresolutions.com.
 
 Include what you found, how to reproduce it and the Foundry version (`foundry version`). You will get
 an answer as soon as possible; please allow a reasonable time to fix the problem before you disclose it.
