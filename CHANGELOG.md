@@ -5,6 +5,12 @@ and versions follow [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-20
+
+### Changed
+- The contact address in `SECURITY.md` and in the `.deb` package is now `info@sandsoftwaresolutions.com`.
+- Go dependencies and the GitHub Actions used in CI were updated.
+
 ## [0.5.1] - 2026-10-16
 
 ### Fixed
